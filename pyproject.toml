@@ -1,0 +1,35 @@
+[project]
+name = "nexus-auto-v3"
+version = "3.2.0"
+description = "NEXUS AUTO V3 - Système d'automatisation hybride TikTok/YouTube (Headless + API)"
+requires-python = ">=3.10"
+dependencies = [
+  "playwright>=1.46",
+  "cryptography>=40.0",
+  "aiohttp>=3.9.0",
+  "psutil>=5.9.0",
+  "pyyaml>=6.0",
+  "openai>=1.0.0",
+  "moviepy>=1.0.3",
+  "numpy>=1.24.0",
+  "Pillow>=10.0.0",
+  "requests>=2.31.0"
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "gemini_headless",
+    "gemini_headless.collect",
+    "gemini_headless.collect.filters",
+    "gemini_headless.collect.producers",
+    "gemini_headless.collect.utils",
+    "gemini_headless.connectors",
+    "gemini_headless.utils",
+    "tools",
+    "prompts"
+]
+include-package-data = true

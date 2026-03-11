@@ -1,0 +1,70 @@
+# Configuration NEXUS_AUTO V3
+# Version: 3.2.1 (Centralized Data Mode)
+
+project_name: "nexus_auto_v3"
+log_level: "INFO"
+
+# --- CONFIGURATION DU PROFIL NAVIGATEUR (CENTRALISÉ) ---
+# Modification : Chemin ABSOLU pour centraliser les données sur ce PC.
+# Le bot stockera tout (cookies, sessions, cache) dans ce dossier fixe.
+# Vous pouvez changer "C:/Nexus_Data" par votre emplacement préféré.
+SENTINEL_PROFILE: "C:/Nexus_Data"
+
+directories:
+  input_folder: "INPUT_VIDEO"
+  output_folder: "OUTPUT_VIDEO"
+  archive_folder: "ARCHIVE"
+  buffer_folder: "BUFFER"
+  rejected_folder: "REJECTED"
+  # Ajout explicite du dossier holding pour la persistance du Pacer
+  holding_folder: "HOLDING"
+  # Ajout du chemin vers le pack SFX (Favorites)
+  sfx_folder: "C:/Chemin/Vers/Votre/Pack/SFX"
+
+# Paramètres du Cerveau (Génération)
+brain:
+  default_mode: "HEADLESS" # HEADLESS ou API
+  fallback_enabled: true
+  topics:
+    - "Psychologie du Trading"
+    - "Gestion des Risques"
+    - "Stratégies Scalping"
+    - "Mindset Millionnaire"
+    - "Erreurs de Débutant"
+
+# Paramètres d'Intelligence & Résilience
+resilience:
+  circuit_breaker:
+    max_failures: 3          # Nombre d'échecs avant ouverture du circuit
+    reset_timeout: 1800      # Temps en secondes avant de retenter le Headless (30 min)
+    fallback_strategy: "IMMEDIATE_API" # Stratégie quand le circuit est ouvert
+
+# Règles de Validation Média (Fail-Fast)
+validation:
+  tiktok:
+    max_duration: 60
+    min_duration: 5
+    required_ratio: 0.5625 # 9:16
+    ratio_tolerance: 0.01
+  youtube_shorts:
+    max_duration: 60
+    required_ratio: 0.5625
+
+# Paramètres des Outils
+tools:
+  tiktok:
+    headless: true
+    upload_timeout: 120
+    cookies_path: "cookies_tt.json"
+  youtube:
+    headless: true
+    upload_timeout: 120
+    cookies_path: "cookies_yt.json"
+
+# API Keys (Fallback & Services)
+# IMPORTANT : En production, privilégiez les variables d'environnement si possible.
+api_keys:
+  gemini: "VOTRE_CLE_GEMINI_ICI"
+  openai: "VOTRE_CLE_OPENAI_ICI"
+  elevenlabs: "VOTRE_CLE_ELEVENLABS_SI_BESOIN"
+  # affiliate_link: "https://votre-lien-affiliation.com"
