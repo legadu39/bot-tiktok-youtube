@@ -560,9 +560,15 @@ class NexusBrain:
         bg_filename = "bg_white_ffffff.jpg" if self.bg_style == "white" else "bg_cream_f5f5f7.jpg"
         bg_path     = os.path.join(self.root_dir, bg_filename)
 
-        if not os.path.exists(bg_path):
-            self.animator.create_background(bg_path, style=self.bg_style)
-            jlog("info", msg=f"Fond {self.bg_style} généré : {bg_filename}")
+        # 🛡️ CORRECTION 1 : Détruire le fond pollué (qui contient le vieux texte gravé)
+        if os.path.exists(bg_path):
+            try:
+                os.remove(bg_path)
+            except Exception:
+                pass
+
+        self.animator.create_background(bg_path, style=self.bg_style)
+        jlog("info", msg=f"Fond {self.bg_style} généré à neuf : {bg_filename}")
 
         return [bg_path for _ in scenes]
 
@@ -608,6 +614,14 @@ class NexusBrain:
             
             if not scenes:
                 raise ValueError("Aucune scène n'a été trouvée dans les données de script.")
+
+            # 🛡️ CORRECTION 2 : Sauvegarde mathématique pour le Fallback Audio
+            # Si on a 48 scènes sur un audio de 5s, les mots durent 0.1s et sont transparents.
+            # On force une durée minimale (ex: 0.35s par mot) pour l'affichage DA/Test.
+            min_required_duration = len(scenes) * 0.35
+            if total_duration < min_required_duration:
+                jlog("warning", msg=f"Audio trop court ({total_duration}s). Rallongement artificiel à {min_required_duration:.1f}s pour permettre l'animation des sous-titres.")
+                total_duration = min_required_duration
 
             def estimate_reading_weight(text: str) -> float:
                 clean = re.sub(r'\[.*?\]', '', text).strip()
