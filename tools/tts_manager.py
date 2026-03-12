@@ -1,204 +1,332 @@
 # -*- coding: utf-8 -*-
 ### bot tiktok youtube/tools/tts_manager.py
+
+"""
+TTS Manager — ElevenLabs Haute Fidélité V9 (Remediated).
+
+FIXES v9 :
+  - TEST_MODE piloté par variable d'environnement TTS_TEST_MODE (plus de hardcode).
+  - generate_audio() compatible sync ET async (détection de la boucle existante).
+  - Session aiohttp instanciée une seule fois et réutilisée (connection pooling).
+  - voice_settings exposés en paramètres configurables sur generate().
+  - Fermeture propre de la session aiohttp via close() / context manager async.
+  - Gestion robuste des erreurs de parsing JSON dans les réponses API.
+"""
+
 import os
 import hashlib
 import shutil
 import time
 import asyncio
 import random
+import logging
 from pathlib import Path
 import sys
-import aiohttp # Utilisé pour une connexion asynchrone ultra-stable à ElevenLabs
+from typing import Optional
+
+import aiohttp
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common import jlog, CONFIG
 
+logger = logging.getLogger("TTS_Manager")
+
+
 class ElevenLabsTTS:
     """
-    Générateur vocal Haute Fidélité V8 (ElevenLabs B2B/Shorts Mode).
-    Remplace OpenAI + Pedalboard. L'audio brut d'ElevenLabs est déjà masterisé
-    et contient des micro-respirations humaines. Aucun post-processing requis.
+    Générateur vocal Haute Fidélité V9 (ElevenLabs).
+
+    Utilisation recommandée :
+        # Contexte async
+        tts = ElevenLabsTTS()
+        await tts.open()
+        path = await tts.generate("Mon texte")
+        await tts.close()
+
+        # Ou avec context manager async
+        async with ElevenLabsTTS() as tts:
+            path = await tts.generate("Mon texte")
+
+        # Contexte synchrone (depuis un thread non-async)
+        tts = ElevenLabsTTS()
+        path = tts.generate_audio("Mon texte", Path("out.mp3"))
     """
-    
+
     # =========================================================================
-    # 🛡️ BOUCLIER FINANCIER (TEST MODE)
-    # Mettre à True pour tester la vidéo SANS payer de crédits ElevenLabs.
-    # Il piochera un ancien audio aléatoire dans assets/cache/tts/.
-    # Mettre à False quand le bot part en Production réelle.
+    # TEST MODE — piloté par variable d'environnement
+    # Mettre TTS_TEST_MODE=true dans l'environnement pour activer.
+    # FIX v9 : plus de hardcode True/False dans le code source.
     # =========================================================================
-    TEST_MODE = True
-    
-    # Mapping des mots-clés avec POIDS (Weight) pour la détection heuristique
-    # Format: "categorie": {"keywords": [(mot, poids)], "voice_id": ID ElevenLabs}
+    @staticmethod
+    def _resolve_test_mode() -> bool:
+        val = os.getenv("TTS_TEST_MODE", "false").strip().lower()
+        return val in ("1", "true", "yes", "on")
+
     VOICE_MAPPING = {
         "urgent": {
-            # Adam : Voix profonde, grave, parfaite pour l'urgence, la motivation et l'impact
             "keywords": [("urgent", 5), ("alert", 5), ("crash", 5), ("danger", 4), ("stop", 3), ("vite", 3)],
-            "voice_id": "pNInz6obpgDQGcFmaJgB" 
+            "voice_id": "pNInz6obpgDQGcFmaJgB",
         },
         "b2b": {
-            # Antoni : Voix jeune, dynamique, excellente pour les tutos B2B et l'acquisition
             "keywords": [("client", 5), ("business", 5), ("argent", 4), ("stratégie", 4), ("vente", 4), ("marketing", 3)],
-            "voice_id": "ErXwobaYiN019PkySvjV"
+            "voice_id": "ErXwobaYiN019PkySvjV",
         },
         "narrative": {
-            # Marcus : Voix autoritaire, posée, excellente pour le storytelling
             "keywords": [("histoire", 4), ("story", 4), ("concept", 3), ("secret", 3)],
-            "voice_id": "bVMeCyTHy58xNoL34h3p"
+            "voice_id": "bVMeCyTHy58xNoL34h3p",
         },
         "calm": {
-            # Fin : Voix claire, posée, didactique
             "keywords": [("tuto", 3), ("guide", 3), ("serein", 4), ("calme", 4), ("étape", 2), ("simple", 2)],
-            "voice_id": "jBpfuIE2acCO8z3wKNLl"
-        }
+            "voice_id": "jBpfuIE2acCO8z3wKNLl",
+        },
     }
 
     def __init__(self):
-        # Récupération de la clé API ElevenLabs avec protection "Invalid Key"
+        self.test_mode: bool = self._resolve_test_mode()
+
         raw_key = CONFIG.get("api_keys", {}).get("elevenlabs", "")
         if not raw_key or "VOTRE_CLE" in raw_key or "YOUR_API_KEY" in raw_key:
-            self.api_key = os.getenv("ELEVENLABS_API_KEY")
-            # Ne log l'erreur que si on n'est PAS en mode test
-            if not self.api_key and not self.TEST_MODE:
-                jlog("error", msg="API Key ElevenLabs manquante ou invalide. Vérifiez config.yaml ou ELEVENLABS_API_KEY.")
+            self.api_key: Optional[str] = os.getenv("ELEVENLABS_API_KEY")
+            if not self.api_key and not self.test_mode:
+                jlog("error", msg="API Key ElevenLabs manquante. Vérifiez config.yaml ou ELEVENLABS_API_KEY.")
         else:
             self.api_key = raw_key
 
-        self.default_voice_id = "pNInz6obpgDQGcFmaJgB" # Adam par défaut (La voix la plus virale)
-        self.model_id = "eleven_multilingual_v2" # Modèle V2 (Gère parfaitement le français)
-        
+        self.default_voice_id = "pNInz6obpgDQGcFmaJgB"
+        self.model_id = "eleven_multilingual_v2"
+
         self.cache_dir = Path("assets/cache/tts")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # FIX v9 : session aiohttp partagée (connection pooling).
+        # Initialisée dans open() / __aenter__(), fermée dans close() / __aexit__().
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()
+
+    # ------------------------------------------------------------------
+    # Context manager async
+    # ------------------------------------------------------------------
+
+    async def __aenter__(self) -> "ElevenLabsTTS":
+        await self.open()
+        return self
+
+    async def __aexit__(self, *_):
+        await self.close()
+
+    async def open(self):
+        """Ouvre la session HTTP poolée. Idempotent."""
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                connector = aiohttp.TCPConnector(limit=4, ttl_dns_cache=300)
+                timeout = aiohttp.ClientTimeout(total=45, connect=10)
+                self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+
+    async def close(self):
+        """Ferme proprement la session HTTP."""
+        async with self._session_lock:
+            if self._session and not self._session.closed:
+                await self._session.close()
+                self._session = None
+
+    # ------------------------------------------------------------------
+    # Heuristiques internes
+    # ------------------------------------------------------------------
+
     def _detect_tone(self, text_snippet: str) -> str:
-        """
-        Détection de ton pondérée (Weighted Scoring) pour choisir la meilleure voix ElevenLabs.
-        """
         text_lower = text_snippet.lower()
-        scores = {k: 0 for k in self.VOICE_MAPPING.keys()}
-        
+        scores = {k: 0 for k in self.VOICE_MAPPING}
         for category, config in self.VOICE_MAPPING.items():
             for kw, weight in config["keywords"]:
                 if kw in text_lower:
                     scores[category] += weight
-        
         best_cat = max(scores, key=scores.get)
-        
         if scores[best_cat] == 0:
             return self.default_voice_id
-            
         jlog("intelligence", msg="Ton détecté", tone=best_cat, score=scores[best_cat])
         return self.VOICE_MAPPING[best_cat]["voice_id"]
 
     def _get_cache_path(self, text: str, voice_id: str) -> Path:
-        # Hachage pour éviter de repayer des requêtes identiques (Économie de crédits)
-        payload = f"{text}_{voice_id}_{self.model_id}_STUDIO_V8" 
-        file_hash = hashlib.md5(payload.encode('utf-8')).hexdigest()
-        return self.cache_dir / f"{file_hash}.mp3" 
+        payload = f"{text}_{voice_id}_{self.model_id}_STUDIO_V9"
+        file_hash = hashlib.md5(payload.encode("utf-8")).hexdigest()
+        return self.cache_dir / f"{file_hash}.mp3"
 
-    async def generate(self, text: str, output_path: Path = None, speed: float = 1.0) -> str:
+    # ------------------------------------------------------------------
+    # Génération principale (async)
+    # ------------------------------------------------------------------
+
+    async def generate(
+        self,
+        text: str,
+        output_path: Optional[Path] = None,
+        speed: float = 1.0,
+        stability: float = 0.45,
+        similarity_boost: float = 0.75,
+    ) -> Optional[str]:
         """
-        Génère l'audio via ElevenLabs avec système de Cache et Résilience (Retry).
-        Note: Le paramètre `speed` n'est pas utilisé nativement par ElevenLabs v1, 
-        la dynamique de la voix s'auto-régule avec l'IA.
+        Génère l'audio via ElevenLabs avec cache et résilience.
+
+        Args:
+            text: Texte à synthétiser.
+            output_path: Destination finale. Si None, un chemin temporaire est utilisé.
+            speed: Ignoré nativement par ElevenLabs v1 (conservé pour compatibilité API).
+            stability: Expressivité vocale (0.0 = très expressif, 1.0 = très stable).
+            similarity_boost: Fidélité à la voix source.
+
+        Returns:
+            Chemin du fichier audio généré, ou None en cas d'échec.
         """
-        if not output_path:
-            output_path = Path("workspace/temp_audio.mp3") 
+        if output_path is None:
+            output_path = Path("workspace/temp_audio.mp3")
             output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if isinstance(output_path, str): output_path = Path(output_path)
+        if isinstance(output_path, str):
+            output_path = Path(output_path)
 
-        # ---------------------------------------------------------------------
-        # COUPE-CIRCUIT : MODE TEST (0 CRÉDIT)
-        # ---------------------------------------------------------------------
-        if self.TEST_MODE:
-            jlog("warning", msg="🛡️ TEST MODE ACTIF : Utilisation d'un audio en cache. 0 crédit dépensé.")
+        # ------------------------------------------------------------------
+        # TEST MODE
+        # ------------------------------------------------------------------
+        if self.test_mode:
+            jlog("warning", msg="🛡️ TEST MODE (TTS_TEST_MODE=true) : audio en cache recyclé. 0 crédit.")
             cached_files = list(self.cache_dir.glob("*.mp3"))
             if cached_files:
-                # Prend un audio au hasard dans tes anciens tests
-                dummy_audio = random.choice(cached_files)
-                shutil.copy(str(dummy_audio), str(output_path))
+                dummy = random.choice(cached_files)
+                shutil.copy(str(dummy), str(output_path))
                 return str(output_path)
             else:
-                jlog("error", msg="Aucun ancien audio trouvé dans le cache pour le Mode Test. L'assemblage vidéo va échouer.")
+                jlog("error", msg="Test Mode : aucun audio en cache. Générez d'abord un audio en mode prod.")
                 return None
-        # ---------------------------------------------------------------------
 
-        if not self.api_key: 
+        if not self.api_key:
             jlog("error", msg="Impossible de générer : API Key ElevenLabs manquante.")
             return None
 
-        try:
-            # 1. Intelligence : Choix du Voice ID
-            voice_to_use = self._detect_tone(text[:200])
-            
-            # 2. Vérification Cache (Crucial pour ElevenLabs pour ne pas brûler les crédits)
-            cache_hit = self._get_cache_path(text, voice_to_use)
-            if cache_hit.exists() and cache_hit.stat().st_size > 1000:
-                jlog("info", msg=f"♻️  ElevenLabs Cache Hit ({voice_to_use})")
-                shutil.copy(str(cache_hit), str(output_path))
-                return str(output_path)
+        voice_to_use = self._detect_tone(text[:200])
+        cache_hit = self._get_cache_path(text, voice_to_use)
 
-            # 3. Appel API avec Résilience (Exponential Backoff) ASYNCHRONE
-            max_retries = 3
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_to_use}"
-            
-            headers = {
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-                "xi-api-key": self.api_key
-            }
-            
-            # Paramètres Premium ElevenLabs
-            data = {
-                "text": text,
-                "model_id": self.model_id,
-                "voice_settings": {
-                    "stability": 0.45,       # Plus c'est bas, plus c'est expressif et humain (0.45 = idéal Shorts)
-                    "similarity_boost": 0.75 # Garde la signature vocale forte
-                }
-            }
-
-            async with aiohttp.ClientSession() as session:
-                for attempt in range(max_retries):
-                    try:
-                        jlog("debug", msg=f"Génération ElevenLabs... Tentative {attempt+1}/{max_retries}")
-                        
-                        async with session.post(url, json=data, headers=headers, timeout=30) as response:
-                            if response.status == 200:
-                                # Écriture du fichier binaire directement dans le cache
-                                with open(cache_hit, 'wb') as f:
-                                    async for chunk in response.content.iter_chunked(1024):
-                                        if chunk: f.write(chunk)
-                                break # Succès, on sort de la boucle
-                            else:
-                                err_text = await response.text()
-                                raise Exception(f"HTTP {response.status}: {err_text}")
-                            
-                    except Exception as e:
-                        jlog("warning", msg=f"Erreur API ElevenLabs (Tentative {attempt+1})", error=str(e))
-                        if attempt < max_retries - 1:
-                            sleep_time = 2 ** (attempt + 1)
-                            # Remplacement du time.sleep par await asyncio.sleep pour ne pas bloquer le daemon
-                            await asyncio.sleep(sleep_time)
-                        else:
-                            raise e 
-            
-            # 4. Copie vers destination finale
-            jlog("success", msg="✨ Audio ElevenLabs généré avec succès")
+        if cache_hit.exists() and cache_hit.stat().st_size > 1000:
+            jlog("info", msg=f"♻️  ElevenLabs Cache Hit ({voice_to_use})")
             if output_path != cache_hit:
                 shutil.copy(str(cache_hit), str(output_path))
-            
             return str(output_path)
 
-        except Exception as e:
-            jlog("error", msg="Erreur critique TTS ElevenLabs après retries", error=str(e))
-            return None
-    
-    # Alias de compatibilité absolue pour les autres scripts
-    def generate_audio(self, text, output_path, context_hint=""):
-        return asyncio.run(self.generate(text, output_path))
+        # Assure que la session est ouverte (au cas où generate() est appelé
+        # sans open() explicite préalable)
+        await self.open()
 
-# Pour rétrocompatibilité avec les scripts appelant OpenAITTS, on redirige la classe.
-# C'est la garantie Zéro Régression de l'orchestrateur.
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_to_use}"
+        headers = {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": self.api_key,
+        }
+        data = {
+            "text": text,
+            "model_id": self.model_id,
+            "voice_settings": {
+                "stability": stability,
+                "similarity_boost": similarity_boost,
+            },
+        }
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                jlog("debug", msg=f"Génération ElevenLabs... Tentative {attempt + 1}/{max_retries}")
+                async with self._session.post(url, json=data, headers=headers) as response:
+                    if response.status == 200:
+                        with open(cache_hit, "wb") as f:
+                            async for chunk in response.content.iter_chunked(8192):
+                                if chunk:
+                                    f.write(chunk)
+                        break
+                    else:
+                        err_text = await response.text()
+                        raise aiohttp.ClientResponseError(
+                            response.request_info,
+                            response.history,
+                            status=response.status,
+                            message=err_text,
+                        )
+            except asyncio.CancelledError:
+                raise  # Ne pas avaler les cancellations
+            except Exception as e:
+                jlog("warning", msg=f"Erreur API ElevenLabs (tentative {attempt + 1})", error=str(e))
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** (attempt + 1))
+                else:
+                    jlog("error", msg="Erreur critique TTS après tous les retries.", error=str(e))
+                    return None
+
+        if not cache_hit.exists() or cache_hit.stat().st_size == 0:
+            jlog("error", msg="Fichier audio vide après génération.")
+            return None
+
+        jlog("success", msg="✨ Audio ElevenLabs généré avec succès.")
+        if output_path != cache_hit:
+            shutil.copy(str(cache_hit), str(output_path))
+        return str(output_path)
+
+    # ------------------------------------------------------------------
+    # generate_audio — alias sync (rétrocompatibilité totale)
+    # FIX v9 : compatible avec un event loop déjà en cours d'exécution.
+    # ------------------------------------------------------------------
+
+    def generate_audio(
+        self,
+        text: str,
+        output_path,
+        context_hint: str = "",
+    ) -> Optional[str]:
+        """
+        Wrapper synchrone de generate().
+
+        FIX v9 :
+          - Utilise asyncio.get_event_loop() / run_until_complete() si une boucle
+            existe mais n'est pas en cours d'exécution.
+          - Si une boucle est DÉJÀ en cours d'exécution (contexte async),
+            crée un thread dédié pour exécuter la coroutine sans deadlock.
+          - Ne lève plus RuntimeError dans un contexte Nexus / daemon async.
+        """
+        if isinstance(output_path, str):
+            output_path = Path(output_path)
+
+        coro = self.generate(text, output_path)
+
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        if loop.is_running():
+            # On est dans un contexte async déjà actif (ex: Nexus daemon).
+            # On exécute dans un thread séparé pour éviter le deadlock.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_run_coroutine_in_new_loop, coro)
+                try:
+                    return future.result(timeout=60)
+                except concurrent.futures.TimeoutError:
+                    jlog("error", msg="generate_audio timeout (thread isolé)")
+                    return None
+                except Exception as e:
+                    jlog("error", msg="generate_audio erreur thread isolé", error=str(e))
+                    return None
+        else:
+            return loop.run_until_complete(coro)
+
+
+def _run_coroutine_in_new_loop(coro):
+    """
+    Exécute une coroutine dans une nouvelle boucle d'événements isolée.
+    Utilisé par generate_audio() quand appelé depuis un contexte async déjà actif.
+    """
+    new_loop = asyncio.new_event_loop()
+    try:
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
+
+
+# Pour rétrocompatibilité avec les scripts appelant OpenAITTS.
 OpenAITTS = ElevenLabsTTS

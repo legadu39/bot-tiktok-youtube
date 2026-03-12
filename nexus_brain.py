@@ -49,7 +49,7 @@ class SemanticException(Exception):
 
 class NexusBrain:
     """
-    🧠 NEXUS BRAIN V8.5 (RÉSILIENT HYBRIDE — ANTI-HALLUCINATION)
+    🧠 NEXUS BRAIN V8.7 (TITANIUM PARSER — ANTI-CRASH & SMART TIMING)
     ARCHITECTURE : Délègue l'intelligence à 'collect_cli.py'.
     """
     def __init__(self):
@@ -111,7 +111,7 @@ class NexusBrain:
         self.signals_dir   = Path("./temp_signals")
         self.signals_dir.mkdir(exist_ok=True)
 
-        jlog("info", msg="Nexus Brain V8.5 initialized (Resilient Mode)")
+        jlog("info", msg="Nexus Brain V8.7 initialized (Titanium Parser & Smart Timing)")
 
     # -------------------------------------------------------------------------
     # INTELLIGENCE DÉLÉGUÉE & MÉMOIRE TRAUMATIQUE
@@ -176,7 +176,6 @@ class NexusBrain:
             
             stdout, stderr = process.communicate(timeout=600)
 
-            # INTELLIGENCE : Détection de l'interruption utilisateur (Code 130)
             if process.returncode == 130:
                 jlog("info", msg="Interruption utilisateur détectée (Code 130) dans le CLI Agent.")
                 raise KeyboardInterrupt("Arrêt manuel détecté par le sous-processus.")
@@ -199,7 +198,7 @@ class NexusBrain:
         except KeyboardInterrupt:
             if process:
                 process.kill()
-            raise # On propage l'interruption proprement vers le Main Loop
+            raise 
         except Exception as e:
             if process:
                 process.kill()
@@ -340,11 +339,12 @@ class NexusBrain:
 
     def _parse_script_from_text(self, text: str) -> Optional[Dict]:
         try:
-            title_match = re.search(r"TITRE:\s*(.*)", text, re.IGNORECASE)
-            title       = title_match.group(1).strip() if title_match else "Sujet Mystère"
+            # INTELLIGENCE V8.7: Blindage contre les espaces parasites \s*
+            title_match = re.search(r"TITRE\s*:\s*(.*)", text, re.IGNORECASE)
+            title       = title_match.group(1).strip(" \t\n\r\\\"'*") if title_match else "Sujet Mystère"
 
-            tags_match = re.search(r"TAGS:\s*(.*)", text, re.IGNORECASE)
-            tags_list  = [t.strip() for t in tags_match.group(1).split(",")] if tags_match else []
+            tags_match = re.search(r"TAGS\s*:\s*(.*)", text, re.IGNORECASE)
+            tags_list  = [t.strip(" \t\n\r\\\"'*") for t in tags_match.group(1).split(",")] if tags_match else []
 
             scenes       = []
             scene_blocks = re.split(r"SCENE\s*\d+", text, flags=re.IGNORECASE)
@@ -354,19 +354,20 @@ class NexusBrain:
                 if not block:
                     continue
 
-                text_match  = re.search(r"TEXTE:\s*(.*?)(?=\n(?:VISUEL|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
+                # INTELLIGENCE V8.7: Tolérance extrême sur les ":"
+                text_match  = re.search(r"TEXTE\s*:\s*(.*?)(?=\n(?:VISUEL|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
                 scene_text  = text_match.group(1).strip() if text_match else ""
 
-                visuel_match  = re.search(r"VISUEL:\s*(.*?)(?=\n(?:TEXTE|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
+                visuel_match  = re.search(r"VISUEL\s*:\s*(.*?)(?=\n(?:TEXTE|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
                 scene_visuel  = visuel_match.group(1).strip() if visuel_match else "abstract trading background"
 
-                overlay_match = re.search(r"OVERLAY:\s*(.*?)(?=\n|$)", block, re.IGNORECASE)
+                overlay_match = re.search(r"OVERLAY\s*:\s*(.*?)(?=\n|$)", block, re.IGNORECASE)
                 keywords      = [k.strip() for k in overlay_match.group(1).split(",")] if overlay_match else []
 
                 transition_type = "none"
-                if "TRANSITION: SLIDE" in scene_visuel.upper():
+                if "TRANSITION: SLIDE" in scene_visuel.upper() or "TRANSITION : SLIDE" in scene_visuel.upper():
                     transition_type = "slide"
-                elif "TRANSITION: FADE" in scene_visuel.upper():
+                elif "TRANSITION: FADE" in scene_visuel.upper() or "TRANSITION : FADE" in scene_visuel.upper():
                     transition_type = "fade"
 
                 if scene_text:
@@ -394,10 +395,10 @@ class NexusBrain:
             return None
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 0 : BRAINSTORMING (Parseur Hybride & Auto-Heal)
+    # ÉTAPE 0 : BRAINSTORMING (Parseur Hybride Sécurisé)
     # -------------------------------------------------------------------------
     async def _step_0_brainstorm_topic(self) -> str:
-        jlog("step", msg="Step 0: Brainstorming (CLI Delegation avec Parseur Hybride)")
+        jlog("step", msg="Step 0: Brainstorming (CLI Delegation avec Titanium Parser)")
 
         all_topics    = self._get_recent_topics(limit=None)
         recent_context = ", ".join(all_topics[-20:]) if all_topics else ""
@@ -423,17 +424,16 @@ class NexusBrain:
             try:
                 topic_candidate = None
                 
-                # INTELLIGENCE 1 : Approche Hybride - Tentative Texte Structuré
-                title_match = re.search(r'(?:TITRE|TITLE):\s*(.+)', raw_response, re.IGNORECASE)
+                # INTELLIGENCE V8.7 : Regex Indestructible (tolère les espaces et nettoie le gras markdown)
+                title_match = re.search(r'(?:TITRE|TITLE)\s*:\s*(.+)', raw_response, re.IGNORECASE)
                 if title_match:
-                    topic_candidate = title_match.group(1).strip()
+                    topic_candidate = title_match.group(1).strip(" \t\n\r\\\"'*")
                 else:
-                    # INTELLIGENCE 2 : Fallback - Extraction de force si l'IA a généré du JSON
-                    json_match = re.search(r'\{.*\}', raw_response.strip(), re.DOTALL)
+                    json_match = re.search(r'\{.*?\}', raw_response.strip(), re.DOTALL)
                     if json_match:
                         try:
                             data = json.loads(json_match.group(0))
-                            topic_candidate = data.get("title", "").strip()
+                            topic_candidate = data.get("title", "").strip(" \t\n\r\\\"'*")
                         except json.JSONDecodeError:
                             pass
                 
@@ -455,7 +455,7 @@ class NexusBrain:
                 # Si on arrive ici, le contenu est parfait
                 topic = topic_candidate
                 is_invalid = False
-                jlog("success", msg=f"Topic validé via Parseur Hybride: {topic}")
+                jlog("success", msg=f"Topic validé via Titanium Parser: {topic}")
                 break
 
             except SemanticException as e:
@@ -518,7 +518,7 @@ class NexusBrain:
 
         if raw_response:
             if "=== DEBUT SCRIPT ===" in raw_response or "SCENE 1" in raw_response:
-                jlog("info", msg="Detected Structured Text Format. Engaging Regex Parser.")
+                jlog("info", msg="Detected Structured Text Format. Engaging Titanium Regex Parser.")
                 script_data = self._parse_script_from_text(raw_response)
 
             if not script_data:
@@ -577,12 +577,16 @@ class NexusBrain:
 
         full_text = " ".join([clean_for_tts(s["text"]) for s in scenes])
         audio_path = await self.tts.generate(full_text, speed=speed)
+        
+        if hasattr(self.tts, "last_generation_cached") and self.tts.last_generation_cached:
+            jlog("warning", msg="🛡️ TEST MODE ACTIF ou Cache détecté. Vérifiez vos crédits ou votre config TTS.")
+            
         if not audio_path or not os.path.exists(audio_path):
             raise Exception("TTS Generation failed")
         return audio_path
 
     # -------------------------------------------------------------------------
-    # ÉTAPE 4 : ASSEMBLAGE
+    # ÉTAPE 4 : ASSEMBLAGE (Intelligent Timing & Transitions)
     # -------------------------------------------------------------------------
     async def _step_4_assembly(
         self,
@@ -600,20 +604,25 @@ class NexusBrain:
         try:
             audio_clip     = AudioFileClip(audio_path)
             total_duration = audio_clip.duration
-            scenes         = script_data["scenes"]
+            scenes         = script_data.get("scenes", [])
+            
+            if not scenes:
+                raise ValueError("Aucune scène n'a été trouvée dans les données de script.")
 
-            total_chars = sum(len(s["text"]) for s in scenes)
-            if total_chars > 0:
-                raw_durations = [
-                    (len(s["text"]) / total_chars) * total_duration
-                    for s in scenes
-                ]
-            else:
-                raw_durations = [total_duration / len(scenes)] * len(scenes)
+            def estimate_reading_weight(text: str) -> float:
+                clean = re.sub(r'\[.*?\]', '', text).strip()
+                base_len = len(clean)
+                pauses = clean.count('.') * 8 + clean.count(',') * 3 + clean.count('!') * 5 + clean.count('?') * 5
+                return float(base_len + pauses + 1)
+
+            weights = [estimate_reading_weight(s.get("text", "")) for s in scenes]
+            total_weight = sum(weights)
+
+            raw_durations = [(w / total_weight) * total_duration for w in weights]
 
             durations = []
             for s, d in zip(scenes, raw_durations):
-                if "[PAUSE]" in s["text"].upper():
+                if "[PAUSE]" in s.get("text", "").upper():
                     durations.append(max(d, self.pause_min_duration))
                 else:
                     durations.append(d)
@@ -645,6 +654,7 @@ class NexusBrain:
                     scene_ctx = None
 
                 prev_keywords = ""
+                scenes_since_last_trans = 0 
 
                 for i, (img_path, dur) in enumerate(zip(visual_assets, durations)):
                     if not os.path.isfile(str(img_path)):
@@ -666,7 +676,12 @@ class NexusBrain:
                             clip, intensity=self.micro_zoom_intensity
                         )
 
+                    if scene_transition == "none" and scenes_since_last_trans >= 3:
+                        scene_transition = random.choice(["slide", "fade"])
+
                     if i > 0 and len(clips) > 0:
+                        transition_applied = False
+                        
                         if scene_transition == "slide" and self.enable_slide_trans:
                             try:
                                 direction = self.animator.get_slide_direction(i)
@@ -676,11 +691,10 @@ class NexusBrain:
                                     direction=direction,
                                     spring=True 
                                 )
-                                clips[-1] = clips[-1].set_duration(
-                                    max(0.05, clips[-1].duration - 0.28)
-                                )
+                                clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.28))
                                 clips.append(trans.set_duration(0.28))
                                 jlog("info", msg=f"↔ Slide {direction} (spring) → scène {i+1}")
+                                transition_applied = True
                             except Exception as te:
                                 jlog("warning", msg=f"Slide skipped: {te}")
 
@@ -690,46 +704,17 @@ class NexusBrain:
                                     clips[-1], clip,
                                     transition_duration=0.10
                                 )
-                                clips[-1] = clips[-1].set_duration(
-                                    max(0.05, clips[-1].duration - 0.10)
-                                )
+                                clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.10))
                                 clips.append(trans.set_duration(0.10))
                                 jlog("info", msg=f"~ Fade → scène {i+1}")
+                                transition_applied = True
                             except Exception as te:
                                 jlog("warning", msg=f"Fade skipped: {te}")
-
-                        elif (scene_transition == "none"
-                              and self.enable_slide_trans
-                              and self.animator.should_slide_transition(prev_keywords, curr_kw)):
-                            try:
-                                direction = self.animator.get_slide_direction(i)
-                                trans     = self.animator.create_slide_transition(
-                                    clips[-1], clip,
-                                    transition_duration=0.28,
-                                    direction=direction,
-                                    spring=True
-                                )
-                                clips[-1] = clips[-1].set_duration(
-                                    max(0.05, clips[-1].duration - 0.28)
-                                )
-                                clips.append(trans.set_duration(0.28))
-                                jlog("info", msg=f"↔ Auto-Slide {direction} → scène {i+1}")
-                            except Exception as te:
-                                jlog("warning", msg=f"Auto-Slide skipped: {te}")
-
-                        elif (scene_transition == "none"
-                              and self.enable_fade_trans
-                              and self.animator.should_fade_transition(prev_keywords, curr_kw)):
-                            try:
-                                trans = self.animator.create_fade_transition(
-                                    clips[-1], clip,
-                                    transition_duration=0.10
-                                )
-                                clips[-1] = clips[-1].set_duration(
-                                    max(0.05, clips[-1].duration - 0.10)
-                                )
-                                clips.append(trans.set_duration(0.10))
-                            except Exception: pass
+                                
+                        if transition_applied:
+                            scenes_since_last_trans = 0
+                        else:
+                            scenes_since_last_trans += 1
 
                     clips.append(clip)
                     prev_keywords = curr_kw
@@ -750,7 +735,7 @@ class NexusBrain:
             subtitle_timeline = []
             cursor = 0.0
             for i, d in enumerate(durations):
-                subtitle_timeline.append((cursor, cursor + d, scenes[i]["text"]))
+                subtitle_timeline.append((cursor, cursor + d, scenes[i].get("text", "")))
                 cursor += d
 
             jlog("info", msg="🎧 Sound Design V8 (click / swoosh / click_deep / silence)…")
@@ -849,7 +834,11 @@ class NexusBrain:
     # -------------------------------------------------------------------------
     async def _process_manual_ingestion(self, video_file: Path):
         jlog("info", msg=f"Processing manual file: {video_file.name}")
-        dest = self.root_dir / video_file.name
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = f"{video_file.stem}_{timestamp}{video_file.suffix}"
+        dest = self.root_dir / safe_name
+        
         shutil.move(str(video_file), str(dest))
 
         possible_meta = video_file.with_suffix('.json')
@@ -861,7 +850,14 @@ class NexusBrain:
 
             raw_ai = await self._invoke_cli_agent(prompt_manual, "manual_meta")
             if raw_ai:
-                pass
+                try:
+                    json_match = re.search(r'\{.*?\}', raw_ai, re.DOTALL)
+                    if json_match:
+                        ai_data = json.loads(json_match.group(0))
+                        smart_meta.update(ai_data)
+                        jlog("success", msg="Métadonnées enrichies par l'IA pour l'ingestion manuelle.")
+                except Exception as e:
+                    jlog("warning", msg="Échec du parsing JSON pour l'ingestion manuelle", error=str(e))
 
             smart_meta["file"] = str(dest)
             with open(dest.with_suffix('.json'), "w", encoding="utf-8") as f:
@@ -927,7 +923,7 @@ class NexusBrain:
                 topic  = await self._step_0_brainstorm_topic()
                 script = await self._step_1_ideation(topic, "INSIDER")
 
-                if script:
+                if script and "scenes" in script and isinstance(script["scenes"], list) and len(script["scenes"]) > 0:
                     if script.get("meta", {}).get("is_fallback", False):
                         jlog("warning", msg="🛡️ SÉCURITÉ QUOTA : Script de secours détecté. Arrêt du cycle.")
                         await asyncio.sleep(300)
@@ -943,11 +939,12 @@ class NexusBrain:
                         await self._deliver_package(vid, script)
                         self.last_run_date = current_date
                         jlog("success", msg=f"Daily cycle complete for {current_date}")
+                else:
+                    jlog("error", msg="Script généré invalide (absence de la clé 'scenes'). Abandon du cycle pour éviter le crash.")
 
             except asyncio.CancelledError:
                 raise 
             except KeyboardInterrupt:
-                # Interception finale : Arrêt propre de tout le système
                 jlog("info", msg="Brain stopped by user (Graceful exit).")
                 sys.exit(0)
             except Exception as e:
