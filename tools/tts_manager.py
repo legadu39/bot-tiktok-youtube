@@ -11,6 +11,7 @@ FIXES v9 :
   - voice_settings exposés en paramètres configurables sur generate().
   - Fermeture propre de la session aiohttp via close() / context manager async.
   - Gestion robuste des erreurs de parsing JSON dans les réponses API.
+  - AUTO-FALLBACK : Bascule en mode test (bouchon/silence généré) si clé API absente.
 """
 
 import os
@@ -88,7 +89,8 @@ class ElevenLabsTTS:
         if not raw_key or "VOTRE_CLE" in raw_key or "YOUR_API_KEY" in raw_key:
             self.api_key: Optional[str] = os.getenv("ELEVENLABS_API_KEY")
             if not self.api_key and not self.test_mode:
-                jlog("error", msg="API Key ElevenLabs manquante. Vérifiez config.yaml ou ELEVENLABS_API_KEY.")
+                jlog("warning", msg="API Key ElevenLabs manquante. Activation automatique du mode TEST/FALLBACK.")
+                self.test_mode = True
         else:
             self.api_key = raw_key
 
@@ -183,22 +185,40 @@ class ElevenLabsTTS:
             output_path = Path(output_path)
 
         # ------------------------------------------------------------------
-        # TEST MODE
+        # TEST MODE / AUTO-FALLBACK
         # ------------------------------------------------------------------
-        if self.test_mode:
-            jlog("warning", msg="🛡️ TEST MODE (TTS_TEST_MODE=true) : audio en cache recyclé. 0 crédit.")
+        if self.test_mode or not self.api_key:
+            jlog("warning", msg="🛡️ TEST MODE / FALLBACK ACTIF : Génération audio simulée. 0 crédit consommé.")
+            
+            # 1. Tenter d'utiliser un ancien fichier du cache
             cached_files = list(self.cache_dir.glob("*.mp3"))
             if cached_files:
                 dummy = random.choice(cached_files)
-                shutil.copy(str(dummy), str(output_path))
+                if output_path != dummy:
+                    shutil.copy(str(dummy), str(output_path))
                 return str(output_path)
-            else:
-                jlog("error", msg="Test Mode : aucun audio en cache. Générez d'abord un audio en mode prod.")
-                return None
-
-        if not self.api_key:
-            jlog("error", msg="Impossible de générer : API Key ElevenLabs manquante.")
-            return None
+            
+            # 2. Tenter d'utiliser le fichier temporaire du mode DA
+            da_audio = Path("workspace/temp_audio.mp3")
+            if da_audio.exists():
+                jlog("info", msg="Test Mode : Utilisation du bouchon 'temp_audio.mp3'.")
+                if output_path != da_audio:
+                    shutil.copy(str(da_audio), str(output_path))
+                return str(output_path)
+                
+            # 3. Auto-Healing : Génération dynamique d'un silence de 5s (Aucune dépendance requise)
+            jlog("info", msg="Test Mode : Aucun audio trouvé. Génération d'un silence audio de 5 secondes.")
+            import wave
+            silent_wav = Path("workspace/silent_fallback.wav")
+            # 44100 Hz, 16-bit, mono, 5 secondes
+            with wave.open(str(silent_wav), 'w') as f:
+                f.setnchannels(1)
+                f.setsampwidth(2)
+                f.setframerate(44100)
+                f.writeframes(b'\x00' * (44100 * 2 * 5))
+                
+            # MoviePy gère nativement le format .wav pour le montage
+            return str(silent_wav)
 
         voice_to_use = self._detect_tone(text[:200])
         cache_hit = self._get_cache_path(text, voice_to_use)

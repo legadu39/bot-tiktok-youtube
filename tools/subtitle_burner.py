@@ -250,13 +250,15 @@ class WordClip:
 
 
 def _compose_frame(
-    t:       float,
-    clips:   List[WordClip],
-    vid_w:   int,
-    vid_h:   int,
-    bg:      tuple = BG_RGB,
+    t:          float,
+    clips:      List[WordClip],
+    vid_w:      int,
+    vid_h:      int,
+    base_frame: np.ndarray,  # 🛡️ INJECTION: Force l'utilisation d'une frame existante
 ) -> np.ndarray:
-    frame = np.full((vid_h, vid_w, 3), bg, dtype=np.uint8)
+    
+    # On travaille sur une copie de la vraie image de la vidéo
+    frame = np.copy(base_frame)
 
     for c in clips:
         if t < c.t_start or t > c.t_full_end:
@@ -607,6 +609,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not MOVIEPY_AVAILABLE:
             return video_clip
 
+        # 🛡️ FAIL-SAFE 1 : Si le script de sous-titres est vide, on sauvegarde la vidéo
+        if not timeline or len(timeline) == 0:
+            print("⚠️  [SubtitleBurner] Alerte: La timeline des sous-titres est vide. Rendu de la vidéo originale sans incrustation.")
+            return video_clip
+
         print(f"🎬  Massive Typography V15 — {len(timeline)} scènes…")
 
         tableaux = group_into_tableaux(timeline, max_per_tableau=3)
@@ -628,12 +635,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
         vid_w    = video_clip.w
         vid_h    = video_clip.h
-        bg       = BG_RGB
         duration = video_clip.duration
         fps      = video_clip.fps or 30
 
+        # 🛡️ FAIL-SAFE 2 : Mise en cache pour éviter les crashs de codec MoviePy
+        last_valid_frame = None
+
         def make_frame(t):
-            return _compose_frame(t, all_clips, vid_w, vid_h, bg=bg)
+            nonlocal last_valid_frame
+            try:
+                # Extraction de l'image de la vidéo générée par l'IA
+                base_frame = video_clip.get_frame(t)
+                last_valid_frame = base_frame
+            except Exception as e:
+                # Si MoviePy plante sur une microseconde précise, on prend l'image précédente
+                if last_valid_frame is not None:
+                    base_frame = last_valid_frame
+                else:
+                    # En dernier recours (t=0), une image noire
+                    base_frame = np.zeros((vid_h, vid_w, 3), dtype=np.uint8)
+                    
+            # On passe la vraie image au composeur (fini le fond statique)
+            return _compose_frame(t, all_clips, vid_w, vid_h, base_frame=base_frame)
 
         from moviepy.editor import VideoClip as MpVideoClip
         sub_layer = MpVideoClip(make_frame, duration=duration).set_fps(fps)
