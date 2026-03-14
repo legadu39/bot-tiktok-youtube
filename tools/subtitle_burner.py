@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 ### bot tiktok youtube/tools/subtitle_burner.py
 """
-NEXUS SUBTITLE BURNER V16 — PREMIUM HORMOZI/ALI ABDAAL STYLE
+NEXUS SUBTITLE BURNER V17 — PREMIUM HORMOZI/ALI ABDAAL STYLE
 ═══════════════════════════════════════════════════════════════════════════════
 
-IMPLÉMENTATION DU PLAN DA (Premium 9/10) :
-  1. Typographie Massive & Ombre Portée : UPPERCASE forcé, Font la plus grasse,
-     Drop shadow (Opacité 15%, Distance 5px, Flou 10px, Angle 90°).
-  2. Pacing Karaoké : Mots groupés par 1 à 3 maximum (via max_per_tableau=3).
+IMPLÉMENTATION DU PLAN DA (Premium 9/10) - POLISH V17 :
+  1. Typographie Massive & Ombre Portée : Casse originale, Font la plus grasse,
+     Drop shadow adouci (Opacité 8%, Y-Offset 8px, Flou 25px).
+  2. Pacing Karaoké : Clear Screen strict à 4 mots max, ou ponctuation (, . ! ?).
   3. Animation Pop : Interpolation mathématique absolue (Scale overshoot),
-     zéro fondu d'entrée (0 à 115% puis 100%).
-  4. Colorimétrie : Fond Blanc cassé, Texte Gris foncé, Mots-clés Vert/Rouge.
+     0 à 115% en 0.08s (avec opacité), puis 100% à 0.20s.
+  4. Pre-roll Temporel : Offset de -0.08s pour anticiper l'audio.
 ═══════════════════════════════════════════════════════════════════════════════
 """
 import os
@@ -41,18 +41,19 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PALETTE PREMIUM (V16 - HORMOZI STYLE)
+# PALETTE PREMIUM (V17 - HORMOZI STYLE)
 # ─────────────────────────────────────────────────────────────────────────────
 
 BG_RGB       = (248, 249, 250)   # #F8F9FA - Blanc cassé (Neutre)
-TEXT_RGB     = (26,  26,  26 )   # #1A1A1A - Gris très foncé (Texte principal)
+# POLISH V17: Remplacement du gris foncé par un Noir profond (#111111)
+TEXT_RGB     = (17,   17,  17 )  # #111111 - Noir profond (Texte principal)
 TEXT_DIM_RGB = (100, 100, 100)   # Gris moyen (Mots de liaison)
 ACCENT_RGB   = (0,   210, 106)   # #00D26A - Vert (Succès, Argent)
 MUTED_RGB    = (255, 59,  48 )   # #FF3B30 - Rouge (Alerte, Perte)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EASING — ARSENAL COMPLET (Pour sorties ou effets secondaires)
+# EASING — ARSENAL COMPLET
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ease_out_expo(p: float) -> float:
@@ -74,22 +75,32 @@ def ease_in_out_sine(p: float) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _find_font(bold: bool = True, size: int = 100) -> ImageFont.FreeTypeFont:
-    # On privilégie les fonts ultra-grasses pour respecter la DA
     candidates = [
         "Montserrat-Black.ttf", "Montserrat-ExtraBold.ttf",
-        "TheBoldFont.ttf", "Inter-Black.ttf", "Inter_Black.ttf",
-        "Poppins-Black.ttf", "Arial-Black.ttf", "arialbd.ttf",
+        "TheBoldFont.ttf", "Inter-Black.ttf", "Poppins-Black.ttf",
+        "Arial-Black.ttf", "arialbd.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",    
+        "C:\\Windows\\Fonts\\impact.ttf",     
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ] if bold else [
-        "Montserrat-Bold.ttf", "Inter-Bold.ttf", "Inter_Bold.ttf",
-        "Poppins-Bold.ttf", "arial.ttf",
+        "Montserrat-Bold.ttf", "Inter-Bold.ttf", "Poppins-Bold.ttf", "arial.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf"
     ]
+    
     for fp in candidates:
         if os.path.exists(fp):
             try:
-                return ImageFont.truetype(fp, size)
+                font = ImageFont.truetype(fp, size)
+                return font
             except Exception:
                 continue
+                
+    print("\n" + "❌"*25)
+    print("❌ [ERREUR CRITIQUE] FONT NON TROUVÉE !")
+    print(f"❌ Impossible de charger une police premium. Taille demandée : {size}")
+    print("❌ PIL force l'utilisation de 'load_default()' : une police minuscule bloquée à ~10px.")
+    print("❌"*25 + "\n")
+    
     return ImageFont.load_default()
 
 
@@ -100,35 +111,38 @@ def render_text_to_rgba(
     color:   tuple = TEXT_RGB,
     max_w:   int   = 880,
 ) -> np.ndarray:
-    """Rendu Premium : UPPERCASE, Font Massive, Ombre Portée (Règle 1)."""
-    # Force l'UPPERCASE
-    text = text.upper()
     
-    # Règle 1 : Force toujours la police la plus grasse disponible
+    # POLISH V17: Suppression du .upper() obligatoire, on garde la casse originale (ou capitalize si on veut)
+    # text = text.upper() 
+    
+    print(f"🎨 [V17] Génération objet texte: '{text}' | font_size={fs} | color={color} | bold={bold}")
+    
     font  = _find_font(bold=True, size=fs)
+    
     dummy = Image.new("RGBA", (1, 1))
     d     = ImageDraw.Draw(dummy)
     bbox  = d.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # Clamp à la largeur de l'écran (50% à 80% via max_w)
     if tw > max_w:
         fs    = max(18, int(fs * (max_w / max(1, tw))))
         font  = _find_font(bold=True, size=fs)
         bbox  = d.textbbox((0, 0), text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # Padding large pour accueillir l'ombre (distance 5px + flou 10px = besoin d'espace)
-    pad_x, pad_y = 30, 30
+    # POLISH V17: Padding agrandi pour absorber le Blur Radius très large (25px)
+    pad_x, pad_y = 50, 50
     cw, ch = tw + pad_x * 2, th + pad_y * 2
     
-    # Calque 1 : L'Ombre (Noir, opacité 15% -> alpha ~38)
+    # Calque 1 : L'Ombre
     shadow_img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     d_shadow   = ImageDraw.Draw(shadow_img)
-    # Décalage Y+5 (Angle 90°)
-    d_shadow.text((pad_x - bbox[0], pad_y - bbox[1] + 5), text, font=font, fill=(0, 0, 0, 38))
-    # Flou Gaussien de 10px
-    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=10))
+    
+    # POLISH V17: Ombre portée UI Design -> Opacity 8% (~20), Y_Offset +8
+    d_shadow.text((pad_x - bbox[0], pad_y - bbox[1] + 8), text, font=font, fill=(0, 0, 0, 20))
+    
+    # POLISH V17: Blur Radius poussé à 25
+    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=25))
     
     # Calque 2 : Le Texte Pur
     text_img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
@@ -146,8 +160,10 @@ def render_price_badge_rgba(
     max_w: int  = 880,
     style: str  = "dark_pill"
 ) -> np.ndarray:
-    """Badge Pill Shape Premium. Modifié pour s'adapter à la nouvelle DA."""
-    text = text.upper()
+    
+    # POLISH V17: Suppression de la majuscule forcée
+    # text = text.upper()
+    
     font  = _find_font(bold=True, size=fs)
     dummy = Image.new("RGBA", (1, 1))
     d     = ImageDraw.Draw(dummy)
@@ -165,17 +181,21 @@ def render_price_badge_rgba(
 
     cw = tw + ph * 2
     ch = th + pv * 2
-    sh = 20 # Espace pour l'ombre DA
+    
+    # POLISH V17: Espace d'ombre agrandi pour supporter le gros Blur
+    sh = 40 
 
     rr = ch // 2
 
     canvas = Image.new("RGBA", (cw + sh * 2, ch + sh * 2), (0, 0, 0, 0))
     d      = ImageDraw.Draw(canvas)
 
-    # Ombre portée de la DA
-    d.rounded_rectangle([sh, sh + 5, cw + sh, ch + sh + 5], radius=rr, fill=(0, 0, 0, 38))
-    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=10))
-    d      = ImageDraw.Draw(canvas) # Redessiner par-dessus le flou
+    # POLISH V17: Ombre portée UI Design -> Opacity 8% (~20), Y_Offset +8
+    d.rounded_rectangle([sh, sh + 8, cw + sh, ch + sh + 8], radius=rr, fill=(0, 0, 0, 20))
+    
+    # POLISH V17: Blur Radius poussé à 25
+    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=25))
+    d      = ImageDraw.Draw(canvas)
 
     if style == "light_pill":
         d.rounded_rectangle([sh, sh, cw + sh, ch + sh], radius=rr, fill=(255, 255, 255, 255))
@@ -254,30 +274,33 @@ def _compose_frame(
 
         elapsed = t - c.t_start
         
-        # RÈGLE 3 : Interpolation "Pop" stricte basée sur le temps (sans fondu)
+        # POLISH V17: Mathématiques de l'Animation (L'Overshoot Exact)
         if elapsed <= 0.0:
-            scale = 0.01 # Invisible au temps 0
-        elif elapsed < 0.10:
-            # T=0s à T=0.1s : Explose de 0% à 115%
-            scale = 1.15 * (elapsed / 0.10)
-        elif elapsed < 0.15:
-            # T=0.1s à T=0.15s : Revient de 115% à 100% (Micro-rebond/Spring)
-            p = (elapsed - 0.10) / 0.05
+            scale = 0.01
+            alpha_in = 0.0
+        elif elapsed < 0.08:
+            # T=0.00s à T=0.08s : Scale 0% -> 115%, Opacity 0% -> 100%
+            p = elapsed / 0.08
+            scale = max(0.01, 1.15 * p)
+            alpha_in = p
+        elif elapsed < 0.20:
+            # T=0.08s à T=0.20s : Scale 115% -> 100% (Stabilisation), Opacity 100%
+            p = (elapsed - 0.08) / 0.12
             scale = 1.15 - (0.15 * p)
+            alpha_in = 1.0
         else:
+            # Fin de l'entrée
             scale = 1.0
+            alpha_in = 1.0
 
-        # Si l'échelle est trop petite, on passe la frame pour économiser du calcul
-        if scale < 0.02:
+        if scale < 0.02 and alpha_in < 0.02:
             continue
 
-        # Suppression Totale des Fondus (Alpha toujours à 100% à l'entrée)
-        alpha_in = 1.0 
         y_pos    = c.target_y
         x_pos    = c.target_x
         alpha    = min(1.0, alpha_in)
 
-        # Animations de sortie (Conservées telles quelles mais le fondu peut être désactivé si besoin)
+        # Animations de sortie
         if t >= c.t_exit_start:
             exit_p = min((t - c.t_exit_start) / max(c.exit_dur, 1e-6), 1.0)
 
@@ -339,7 +362,8 @@ def _compose_frame(
 
 def group_into_tableaux(
     timeline:          List[Tuple[float, float, str]],
-    max_per_tableau:   int = 3, # Règle 2 : Max 3 mots en même temps
+    # POLISH V17: Logique de Nettoyage -> Limite stricte à 4 mots à l'écran
+    max_per_tableau:   int = 4, 
 ) -> List[List[Tuple[float, float, str]]]:
     tableaux, current = [], []
 
@@ -358,12 +382,14 @@ def group_into_tableaux(
             tableaux.append([(start, end, "[PAUSE]")])
             continue
 
+        # POLISH V17: Force le clear screen dès qu'on a atteint la limite de 4 mots
         if len(current) >= max_per_tableau:
             flush()
 
         current.append(entry)
 
-        if clean and clean[-1] in ".!?":
+        # POLISH V17: Logique de Nettoyage (Clearing) -> Dès qu'il y a un point, ou une virgule.
+        if clean and clean[-1] in ".!?,":
             flush()
 
     flush()
@@ -381,14 +407,13 @@ class SubtitleBurner:
     SAFE_W = 880              
     CY     = 1920 // 2        
 
-    # V16 : Typographie Géante
     FS_IMPACT = 280           
     FS_NORMAL = 200           
     FS_STOP   = 140           
     FS_BADGE  = 180           
 
     GAP          = 45           
-    ENTRY_DUR    = 0.18         
+    ENTRY_DUR    = 0.20         # POLISH V17: Temps total d'entrée stabilisé à 0.20s
     STAGGER      = 0.08         
     EXIT_DUR     = 0.16         
     GHOST_OP     = 0.20         
@@ -405,7 +430,6 @@ class SubtitleBurner:
         "to","for","of","and","is","it","be","as","by","we","he","they","you"
     }
     
-    # Règle 4 : Mots-clés mis à jour
     KEYWORDS_ACCENT = {
         "argent", "succès", "secret", "outil", "profit", "gain", "winner", 
         "croissance", "million", "stratégie", "champion"
@@ -444,7 +468,7 @@ class SubtitleBurner:
         mh     = int(1080 * 0.15)
 
         self.ass_header = f"""[Script Info]
-Title: Nexus V16 Hormozi Typography
+Title: Nexus V17 Hormozi Typography
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
@@ -453,7 +477,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TekiyoBold,{font},{self.FS_NORMAL},&H001F1D1D&,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,4,0,1,0,1,2,{mh},{mh},{safe_v},1
+Style: TekiyoBold,{font},{self.FS_NORMAL},&H00111111&,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,4,0,1,0,1,2,{mh},{mh},{safe_v},1
 Style: TekiyoRegular,{font_regular},{self.FS_STOP},&H004D4A4A&,&H000000FF,&H00FFFFFF,&H00000000,0,0,0,0,100,100,3,0,1,0,0,2,{mh},{mh},{safe_v},1
 
 [Events]
@@ -516,7 +540,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             is_badge = (sem == "BADGE" or bool(re.search(r'\d+[\$€%]|[\$€]\d+', clean)))
 
-            # Règle 2/4 : Force le style Pop et la colorimétrie Premium
             if sem == "STOP":
                 fs      = self.FS_STOP
                 color   = TEXT_DIM_RGB
@@ -527,8 +550,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 fs      = self.FS_NORMAL
                 color   = TEXT_RGB
 
-            bold    = True # Force Bold partout pour la Règle 1
-            anim_in = "pop_overshoot" # Force le Pop partout pour la Règle 3
+            bold    = True 
+            anim_in = "pop_overshoot" 
             anim_ins.append(anim_in)
 
             if is_badge:
@@ -552,7 +575,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             stack_y += h + self.GAP
 
-            t_start     = max(0.0, start + idx * self.STAGGER - 0.04)
+            # POLISH V17: L'Offset Temporel (Pre-roll). Anticipation absolue de -0.08s
+            t_start     = max(0.0, (start - 0.08) + (idx * self.STAGGER))
             t_entry_end = t_start + self.ENTRY_DUR
 
             if next_tab_start is not None:
@@ -564,7 +588,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 t_full_end   = end + 0.1
                 anim_out     = "fade_out"
 
-            anim_in = "pop_overshoot" # On force le pop_overshoot
+            anim_in = "pop_overshoot"
 
             word_clips.append(WordClip(
                 arr           = arr,
@@ -595,9 +619,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             print("⚠️  [SubtitleBurner] Alerte: La timeline des sous-titres est vide. Rendu de la vidéo originale sans incrustation.")
             return video_clip
 
-        print(f"🎬  Massive Typography V16 (Premium DA) — {len(timeline)} scènes…")
+        print(f"🎬  Massive Typography V17 (Premium DA) — {len(timeline)} scènes…")
 
-        tableaux = group_into_tableaux(timeline, max_per_tableau=3)
+        # POLISH V17: Mise à jour de l'appel à 4 mots max
+        tableaux = group_into_tableaux(timeline, max_per_tableau=4)
         all_clips: List[WordClip] = []
 
         for i, tab in enumerate(tableaux):
@@ -662,6 +687,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if not clean:
                 continue
             cur.append({"word": clean, "start": wo["start"], "end": wo["end"]})
+            # POLISH V17: Ajout de la virgule pour split logiquement
             has_punct  = clean[-1] in ".?!:," if clean else False
             chunk_full = len(cur) >= 2
             if (not self._is_stop(clean)) or has_punct or chunk_full:
@@ -699,10 +725,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 for c in chunks:
                     st  = self._seconds_to_ass(c["start"])
                     en  = self._seconds_to_ass(c["end"])
+                    # POLISH V17: Retrait de .upper() dans l'ASS
                     txt = c["text"].replace("\\", "")
                     sem = self.get_semantic_class(txt)
                     sty = "TekiyoBold" if sem in ("ACTION", "ACCENT") else "TekiyoRegular"
-                    pop = r"{\fscx90\fscy90\alpha&HFF&\t(0,220,\fscx100\fscy100\alpha&H00&)}"
+                    
+                    # POLISH V17: ASS tag mis à jour avec la logique V17
+                    pop = r"{\fscx1\fscy1\alpha&HFF&\t(0,80,\fscx115\fscy115\alpha&H00&)\t(80,200,\fscx100\fscy100)}"
+                    
                     f.write(f"Dialogue: 0,{st},{en},{sty},,0,0,0,,{pop}{txt}\n")
             return True
         except Exception as e:

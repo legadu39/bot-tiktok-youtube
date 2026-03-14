@@ -2,16 +2,18 @@
 ### bot tiktok youtube/tools/tts_manager.py
 
 """
-TTS Manager — ElevenLabs Haute Fidélité V9 (Remediated).
+TTS Manager — ElevenLabs Haute Fidélité V10 (Synchronisation Mathématique).
 
+FIXES v10 :
+  - AUTO-FALLBACK DYNAMIQUE : Le mode test ne pioche plus de vieux audios au hasard.
+    Il lit le texte, calcule le temps humain nécessaire (~13 chars/s) et génère
+    un fichier .wav silencieux millimétré pour garantir un pacing vidéo parfait.
 FIXES v9 :
-  - TEST_MODE piloté par variable d'environnement TTS_TEST_MODE (plus de hardcode).
+  - TEST_MODE piloté par variable d'environnement TTS_TEST_MODE.
   - generate_audio() compatible sync ET async (détection de la boucle existante).
   - Session aiohttp instanciée une seule fois et réutilisée (connection pooling).
   - voice_settings exposés en paramètres configurables sur generate().
   - Fermeture propre de la session aiohttp via close() / context manager async.
-  - Gestion robuste des erreurs de parsing JSON dans les réponses API.
-  - AUTO-FALLBACK : Bascule en mode test (bouchon/silence généré) si clé API absente.
 """
 
 import os
@@ -35,7 +37,7 @@ logger = logging.getLogger("TTS_Manager")
 
 class ElevenLabsTTS:
     """
-    Générateur vocal Haute Fidélité V9 (ElevenLabs).
+    Générateur vocal Haute Fidélité V10 (ElevenLabs).
 
     Utilisation recommandée :
         # Contexte async
@@ -56,7 +58,6 @@ class ElevenLabsTTS:
     # =========================================================================
     # TEST MODE — piloté par variable d'environnement
     # Mettre TTS_TEST_MODE=true dans l'environnement pour activer.
-    # FIX v9 : plus de hardcode True/False dans le code source.
     # =========================================================================
     @staticmethod
     def _resolve_test_mode() -> bool:
@@ -100,8 +101,6 @@ class ElevenLabsTTS:
         self.cache_dir = Path("assets/cache/tts")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # FIX v9 : session aiohttp partagée (connection pooling).
-        # Initialisée dans open() / __aenter__(), fermée dans close() / __aexit__().
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
 
@@ -149,7 +148,7 @@ class ElevenLabsTTS:
         return self.VOICE_MAPPING[best_cat]["voice_id"]
 
     def _get_cache_path(self, text: str, voice_id: str) -> Path:
-        payload = f"{text}_{voice_id}_{self.model_id}_STUDIO_V9"
+        payload = f"{text}_{voice_id}_{self.model_id}_STUDIO_V10"
         file_hash = hashlib.md5(payload.encode("utf-8")).hexdigest()
         return self.cache_dir / f"{file_hash}.mp3"
 
@@ -167,16 +166,6 @@ class ElevenLabsTTS:
     ) -> Optional[str]:
         """
         Génère l'audio via ElevenLabs avec cache et résilience.
-
-        Args:
-            text: Texte à synthétiser.
-            output_path: Destination finale. Si None, un chemin temporaire est utilisé.
-            speed: Ignoré nativement par ElevenLabs v1 (conservé pour compatibilité API).
-            stability: Expressivité vocale (0.0 = très expressif, 1.0 = très stable).
-            similarity_boost: Fidélité à la voix source.
-
-        Returns:
-            Chemin du fichier audio généré, ou None en cas d'échec.
         """
         if output_path is None:
             output_path = Path("workspace/temp_audio.mp3")
@@ -185,39 +174,31 @@ class ElevenLabsTTS:
             output_path = Path(output_path)
 
         # ------------------------------------------------------------------
-        # TEST MODE / AUTO-FALLBACK
+        # TEST MODE / AUTO-FALLBACK V10 (Synchronisation Mathématique)
         # ------------------------------------------------------------------
         if self.test_mode or not self.api_key:
-            jlog("warning", msg="🛡️ TEST MODE / FALLBACK ACTIF : Génération audio simulée. 0 crédit consommé.")
+            jlog("warning", msg="🛡️ TEST MODE / FALLBACK ACTIF : Génération d'un faux audio synchronisé au texte réel.")
             
-            # 1. Tenter d'utiliser un ancien fichier du cache
-            cached_files = list(self.cache_dir.glob("*.mp3"))
-            if cached_files:
-                dummy = random.choice(cached_files)
-                if output_path != dummy:
-                    shutil.copy(str(dummy), str(output_path))
-                return str(output_path)
+            # Calcul de la durée exacte nécessaire pour le VRAI TEXTE de cette session.
+            # Vitesse de lecture moyenne : ~13 caractères par seconde.
+            estimated_duration = max(2.0, len(text) / 13.0)
             
-            # 2. Tenter d'utiliser le fichier temporaire du mode DA
-            da_audio = Path("workspace/temp_audio.mp3")
-            if da_audio.exists():
-                jlog("info", msg="Test Mode : Utilisation du bouchon 'temp_audio.mp3'.")
-                if output_path != da_audio:
-                    shutil.copy(str(da_audio), str(output_path))
-                return str(output_path)
-                
-            # 3. Auto-Healing : Génération dynamique d'un silence de 5s (Aucune dépendance requise)
-            jlog("info", msg="Test Mode : Aucun audio trouvé. Génération d'un silence audio de 5 secondes.")
             import wave
-            silent_wav = Path("workspace/silent_fallback.wav")
-            # 44100 Hz, 16-bit, mono, 5 secondes
+            # On force le format .wav pour le silence synthétique
+            silent_wav = output_path.with_suffix(".wav")
+            
+            framerate = 44100
+            num_frames = int(framerate * estimated_duration)
+            
+            # Génération d'un silence absolu de la durée EXACTE du script texte
             with wave.open(str(silent_wav), 'w') as f:
                 f.setnchannels(1)
                 f.setsampwidth(2)
-                f.setframerate(44100)
-                f.writeframes(b'\x00' * (44100 * 2 * 5))
+                f.setframerate(framerate)
+                f.writeframes(b'\x00' * (num_frames * 2))
                 
-            # MoviePy gère nativement le format .wav pour le montage
+            jlog("info", msg=f"Silence synthétique généré : {estimated_duration:.2f}s pour {len(text)} caractères.")
+            
             return str(silent_wav)
 
         voice_to_use = self._detect_tone(text[:200])
@@ -229,8 +210,6 @@ class ElevenLabsTTS:
                 shutil.copy(str(cache_hit), str(output_path))
             return str(output_path)
 
-        # Assure que la session est ouverte (au cas où generate() est appelé
-        # sans open() explicite préalable)
         await self.open()
 
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_to_use}"
@@ -268,7 +247,7 @@ class ElevenLabsTTS:
                             message=err_text,
                         )
             except asyncio.CancelledError:
-                raise  # Ne pas avaler les cancellations
+                raise 
             except Exception as e:
                 jlog("warning", msg=f"Erreur API ElevenLabs (tentative {attempt + 1})", error=str(e))
                 if attempt < max_retries - 1:
@@ -288,7 +267,6 @@ class ElevenLabsTTS:
 
     # ------------------------------------------------------------------
     # generate_audio — alias sync (rétrocompatibilité totale)
-    # FIX v9 : compatible avec un event loop déjà en cours d'exécution.
     # ------------------------------------------------------------------
 
     def generate_audio(
@@ -299,13 +277,6 @@ class ElevenLabsTTS:
     ) -> Optional[str]:
         """
         Wrapper synchrone de generate().
-
-        FIX v9 :
-          - Utilise asyncio.get_event_loop() / run_until_complete() si une boucle
-            existe mais n'est pas en cours d'exécution.
-          - Si une boucle est DÉJÀ en cours d'exécution (contexte async),
-            crée un thread dédié pour exécuter la coroutine sans deadlock.
-          - Ne lève plus RuntimeError dans un contexte Nexus / daemon async.
         """
         if isinstance(output_path, str):
             output_path = Path(output_path)
@@ -319,8 +290,6 @@ class ElevenLabsTTS:
             asyncio.set_event_loop(loop)
 
         if loop.is_running():
-            # On est dans un contexte async déjà actif (ex: Nexus daemon).
-            # On exécute dans un thread séparé pour éviter le deadlock.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(_run_coroutine_in_new_loop, coro)
@@ -339,7 +308,6 @@ class ElevenLabsTTS:
 def _run_coroutine_in_new_loop(coro):
     """
     Exécute une coroutine dans une nouvelle boucle d'événements isolée.
-    Utilisé par generate_audio() quand appelé depuis un contexte async déjà actif.
     """
     new_loop = asyncio.new_event_loop()
     try:
