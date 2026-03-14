@@ -11,6 +11,7 @@ import math
 import subprocess
 import glob
 import re
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -84,14 +85,12 @@ class NexusBrain:
         self.animator = SceneAnimator()
 
         # ── Phase 1 : Polices géométriques premium V8 (Inter prioritaire) ────
-        font_bold    = CONFIG.get("video", {}).get("subtitle_font",         "Inter-ExtraBold")
-        font_regular = CONFIG.get("video", {}).get("subtitle_font_regular",  "Inter-Light")
-        font_size    = CONFIG.get("video", {}).get("subtitle_size",          None)
-
+        # AUDIT MISSION 1 : On désactive le fichier de config qui force l'ancienne DA !
+        # On impose la nouvelle typographie massive en dur.
         self.subtitle_burner = SubtitleBurner(
-            font=font_bold,
-            font_regular=font_regular,
-            fontsize=font_size
+            font="Montserrat-Black",
+            font_regular="Montserrat-ExtraBold",
+            fontsize=200
         )
 
         # ── Feature flags (config.json → section "video") ─────────────────
@@ -615,9 +614,6 @@ class NexusBrain:
             if not scenes:
                 raise ValueError("Aucune scène n'a été trouvée dans les données de script.")
 
-            # 🛡️ CORRECTION 2 : Sauvegarde mathématique pour le Fallback Audio
-            # Si on a 48 scènes sur un audio de 5s, les mots durent 0.1s et sont transparents.
-            # On force une durée minimale (ex: 0.35s par mot) pour l'affichage DA/Test.
             min_required_duration = len(scenes) * 0.35
             if total_duration < min_required_duration:
                 jlog("warning", msg=f"Audio trop court ({total_duration}s). Rallongement artificiel à {min_required_duration:.1f}s pour permettre l'animation des sous-titres.")
@@ -783,9 +779,11 @@ class NexusBrain:
 
             final_clip = self.subtitle_burner.burn_subtitles(video_track, subtitle_timeline)
 
-            timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
-            suffix      = "_SAFE" if safe_mode else "_PREMIUM"
-            filename    = f"nexus_final_{timestamp}{suffix}.mp4"
+            # AUDIT MISSION 2 : Cache Buster absolu
+            timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            unique_hash = str(uuid.uuid4())[:6]
+            suffix      = "_SAFE" if safe_mode else "_PREMIUM_DA_V16"
+            filename    = f"nexus_final_{timestamp}_{unique_hash}{suffix}.mp4"
             output_path = os.path.join(self.root_dir, filename)
 
             final_clip.write_videofile(

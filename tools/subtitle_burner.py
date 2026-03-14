@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
 ### bot tiktok youtube/tools/subtitle_burner.py
 """
-NEXUS SUBTITLE BURNER V15 — MASSIVE TYPOGRAPHY & SAFE ZONE
+NEXUS SUBTITLE BURNER V16 — PREMIUM HORMOZI/ALI ABDAAL STYLE
 ═══════════════════════════════════════════════════════════════════════════════
 
-PHILOSOPHIE : Le Squint Test (Test des yeux plissés). Chaque mot d'impact doit 
-être perçu comme un bloc noir massif au centre de l'écran.
-
-IMPLÉMENTATION DU PLAN V15 (Scale & Proportion) :
-  1. Auto-Scaling "Massive Clamp" : FS_IMPACT est poussé à 280. Les mots courts 
-     prennent 1/3 de l'écran. Les mots longs sont bridés à 880px (80% de l'écran).
-  2. Safe Zone Verticale : Les mots s'empilent uniquement dans le tiers central 
-     grâce au calcul dynamique des hauteurs. Haut et bas restent vierges.
-  3. Badges mis à jour : Le calcul de la largeur maximale (max_w) est maintenant
-     aussi appliqué aux badges Pill Shape pour éviter qu'ils ne débordent.
+IMPLÉMENTATION DU PLAN DA (Premium 9/10) :
+  1. Typographie Massive & Ombre Portée : UPPERCASE forcé, Font la plus grasse,
+     Drop shadow (Opacité 15%, Distance 5px, Flou 10px, Angle 90°).
+  2. Pacing Karaoké : Mots groupés par 1 à 3 maximum (via max_per_tableau=3).
+  3. Animation Pop : Interpolation mathématique absolue (Scale overshoot),
+     zéro fondu d'entrée (0 à 115% puis 100%).
+  4. Colorimétrie : Fond Blanc cassé, Texte Gris foncé, Mots-clés Vert/Rouge.
 ═══════════════════════════════════════════════════════════════════════════════
 """
 import os
@@ -25,7 +22,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 warnings.filterwarnings("ignore")
 
@@ -44,46 +41,32 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PALETTE PREMIUM (V15 - DÉSATURÉE ET MINIMALISTE)
+# PALETTE PREMIUM (V16 - HORMOZI STYLE)
 # ─────────────────────────────────────────────────────────────────────────────
 
-BG_RGB       = (255, 255, 255)   # #FFFFFF - Blanc pur
-TEXT_RGB     = (17,  17,  17 )   # #111111 - Noir riche, pas aveuglant
-TEXT_DIM_RGB = (74,  74,  77 )   # #4A4A4D - Gris anthracite pour mots de liaison
-ACCENT_RGB   = (123, 44,  191)   # #7B2CBF - Violet premium
-MUTED_RGB    = (230, 57,  70 )   # #E63946 - Rouge corail / terre cuite désaturé
+BG_RGB       = (248, 249, 250)   # #F8F9FA - Blanc cassé (Neutre)
+TEXT_RGB     = (26,  26,  26 )   # #1A1A1A - Gris très foncé (Texte principal)
+TEXT_DIM_RGB = (100, 100, 100)   # Gris moyen (Mots de liaison)
+ACCENT_RGB   = (0,   210, 106)   # #00D26A - Vert (Succès, Argent)
+MUTED_RGB    = (255, 59,  48 )   # #FF3B30 - Rouge (Alerte, Perte)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EASING — ARSENAL COMPLET
+# EASING — ARSENAL COMPLET (Pour sorties ou effets secondaires)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ease_out_expo(p: float) -> float:
-    """Démarrage explosif + freinage chirurgicalement précis (règle des 80%)."""
     p = max(0.0, min(1.0, p))
-    if p >= 1.0:
-        return 1.0
+    if p >= 1.0: return 1.0
     return 1.0 - pow(2.0, -10.0 * p)
 
-
 def ease_in_expo(p: float) -> float:
-    """Départ très lent, puis accélération fulgurante (pour les sorties Hard Wipe)."""
     p = max(0.0, min(1.0, p))
-    if p <= 0.0:
-        return 0.0
+    if p <= 0.0: return 0.0
     return pow(2.0, 10.0 * (p - 1.0))
 
-
 def ease_in_out_sine(p: float) -> float:
-    """Sinusoïdale — pour les sorties douces."""
     return -(math.cos(math.pi * max(0.0, min(1.0, p))) - 1) / 2
-
-
-def ease_out_back(p: float, overshoot: float = 1.2) -> float:
-    """Micro-rebond élégant à l'arrivée (Overshoot)."""
-    p  = max(0.0, min(1.0, p))
-    c1 = overshoot
-    return 1.0 + (c1 + 1.0) * (p - 1.0) ** 3 + c1 * (p - 1.0) ** 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,25 +74,16 @@ def ease_out_back(p: float, overshoot: float = 1.2) -> float:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _find_font(bold: bool = True, size: int = 100) -> ImageFont.FreeTypeFont:
-    candidates = (
-        [
-            "Inter-ExtraBold.ttf", "Inter_ExtraBold.ttf",
-            "Inter-Black.ttf",     "Inter_Black.ttf",
-            "Montserrat-ExtraBold.ttf", "Montserrat-Black.ttf",
-            "Poppins-ExtraBold.ttf", "Poppins-Black.ttf",
-            "arial.ttf", "Arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ]
-        if bold else
-        [
-            "Inter-Medium.ttf",  "Inter_Medium.ttf",
-            "Inter-Regular.ttf", "Inter_Regular.ttf",
-            "Montserrat-Medium.ttf",
-            "Poppins-Medium.ttf",
-            "arial.ttf", "Arial.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        ]
-    )
+    # On privilégie les fonts ultra-grasses pour respecter la DA
+    candidates = [
+        "Montserrat-Black.ttf", "Montserrat-ExtraBold.ttf",
+        "TheBoldFont.ttf", "Inter-Black.ttf", "Inter_Black.ttf",
+        "Poppins-Black.ttf", "Arial-Black.ttf", "arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ] if bold else [
+        "Montserrat-Bold.ttf", "Inter-Bold.ttf", "Inter_Bold.ttf",
+        "Poppins-Bold.ttf", "arial.ttf",
+    ]
     for fp in candidates:
         if os.path.exists(fp):
             try:
@@ -126,25 +100,44 @@ def render_text_to_rgba(
     color:   tuple = TEXT_RGB,
     max_w:   int   = 880,
 ) -> np.ndarray:
-    """Rend du texte en array RGBA. V15: Clamp mathématique ultra-précis."""
-    font  = _find_font(bold=bold, size=fs)
+    """Rendu Premium : UPPERCASE, Font Massive, Ombre Portée (Règle 1)."""
+    # Force l'UPPERCASE
+    text = text.upper()
+    
+    # Règle 1 : Force toujours la police la plus grasse disponible
+    font  = _find_font(bold=True, size=fs)
     dummy = Image.new("RGBA", (1, 1))
     d     = ImageDraw.Draw(dummy)
     bbox  = d.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # V15 : Clamp exact à la limite de la Safe Zone (80% écran)
+    # Clamp à la largeur de l'écran (50% à 80% via max_w)
     if tw > max_w:
         fs    = max(18, int(fs * (max_w / max(1, tw))))
-        font  = _find_font(bold=bold, size=fs)
+        font  = _find_font(bold=True, size=fs)
         bbox  = d.textbbox((0, 0), text, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    pad = 10
-    img = Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
-    d   = ImageDraw.Draw(img)
-    d.text((pad - bbox[0], pad - bbox[1]), text, font=font, fill=color + (255,))
-    return np.array(img)
+    # Padding large pour accueillir l'ombre (distance 5px + flou 10px = besoin d'espace)
+    pad_x, pad_y = 30, 30
+    cw, ch = tw + pad_x * 2, th + pad_y * 2
+    
+    # Calque 1 : L'Ombre (Noir, opacité 15% -> alpha ~38)
+    shadow_img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+    d_shadow   = ImageDraw.Draw(shadow_img)
+    # Décalage Y+5 (Angle 90°)
+    d_shadow.text((pad_x - bbox[0], pad_y - bbox[1] + 5), text, font=font, fill=(0, 0, 0, 38))
+    # Flou Gaussien de 10px
+    shadow_img = shadow_img.filter(ImageFilter.GaussianBlur(radius=10))
+    
+    # Calque 2 : Le Texte Pur
+    text_img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+    d_text   = ImageDraw.Draw(text_img)
+    d_text.text((pad_x - bbox[0], pad_y - bbox[1]), text, font=font, fill=color + (255,))
+    
+    # Composition Finale
+    final_img = Image.alpha_composite(shadow_img, text_img)
+    return np.array(final_img)
 
 
 def render_price_badge_rgba(
@@ -153,17 +146,16 @@ def render_price_badge_rgba(
     max_w: int  = 880,
     style: str  = "dark_pill"
 ) -> np.ndarray:
-    """Badge Pill Shape Premium Apple. V15: Intègre l'Auto-Scaling pour éviter l'overflow."""
+    """Badge Pill Shape Premium. Modifié pour s'adapter à la nouvelle DA."""
+    text = text.upper()
     font  = _find_font(bold=True, size=fs)
     dummy = Image.new("RGBA", (1, 1))
     d     = ImageDraw.Draw(dummy)
     bbox  = d.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    # Paddings adaptés aux polices géantes V15
     ph, pv = 64, 40
 
-    # V15 : Auto-Scaling appliqué au badge total (texte + padding)
     if (tw + ph * 2) > max_w:
         target_tw = max_w - (ph * 2)
         fs = max(18, int(fs * (target_tw / max(1, tw))))
@@ -173,28 +165,25 @@ def render_price_badge_rgba(
 
     cw = tw + ph * 2
     ch = th + pv * 2
-    sh = 16 # Ombre adaptée à l'échelle massive
+    sh = 20 # Espace pour l'ombre DA
 
-    # Pill Shape Mathématique
     rr = ch // 2
 
-    canvas = Image.new("RGBA", (cw + sh + 4, ch + sh + 4), (0, 0, 0, 0))
+    canvas = Image.new("RGBA", (cw + sh * 2, ch + sh * 2), (0, 0, 0, 0))
     d      = ImageDraw.Draw(canvas)
 
+    # Ombre portée de la DA
+    d.rounded_rectangle([sh, sh + 5, cw + sh, ch + sh + 5], radius=rr, fill=(0, 0, 0, 38))
+    canvas = canvas.filter(ImageFilter.GaussianBlur(radius=10))
+    d      = ImageDraw.Draw(canvas) # Redessiner par-dessus le flou
+
     if style == "light_pill":
-        # Ombre très douce et diffuse
-        d.rounded_rectangle([sh//2, sh//2, cw + sh//2, ch + sh//2], radius=rr, fill=(0, 0, 0, 15))
-        # Fond blanc
-        d.rounded_rectangle([0,  0,  cw - 1,  ch - 1], radius=rr, fill=(255, 255, 255, 255))
-        # Texte noir profond
-        tx, ty = (cw - tw) // 2, pv
+        d.rounded_rectangle([sh, sh, cw + sh, ch + sh], radius=rr, fill=(255, 255, 255, 255))
+        tx, ty = sh + (cw - tw) // 2, sh + pv
         d.text((tx - bbox[0], ty - bbox[1]), text, font=font, fill=TEXT_RGB + (255,))
     else:
-        # Dark Pill (très premium)
-        # Fond Noir
-        d.rounded_rectangle([0,  0,  cw - 1,  ch - 1], radius=rr, fill=TEXT_RGB + (255,))
-        # Texte Blanc pur
-        tx, ty = (cw - tw) // 2, pv
+        d.rounded_rectangle([sh, sh, cw + sh, ch + sh], radius=rr, fill=TEXT_RGB + (255,))
+        tx, ty = sh + (cw - tw) // 2, sh + pv
         d.text((tx - bbox[0], ty - bbox[1]), text, font=font, fill=(255, 255, 255, 255))
 
     return np.array(canvas)
@@ -210,8 +199,8 @@ class WordClip:
         "target_x", "target_y",
         "t_start", "t_entry_end",
         "t_exit_start", "t_full_end",
-        "anim_in",        # "slide_up" | "scale_fade" | "pop_overshoot" | "fade_in"
-        "anim_out",       # "ghost_up" | "hard_swipe_up" | "fade_out"
+        "anim_in",        
+        "anim_out",       
         "ghost_opacity",
         "slide_px_in", "slide_px_out",
         "entry_dur", "exit_dur",
@@ -226,7 +215,7 @@ class WordClip:
         t_entry_end:   float,
         t_exit_start:  float,
         t_full_end:    float,
-        anim_in:       str   = "slide_up",
+        anim_in:       str   = "pop_overshoot",
         anim_out:      str   = "hard_swipe_up",
         ghost_opacity: float = 0.20,
         slide_px_in:   int   = 80,
@@ -254,49 +243,48 @@ def _compose_frame(
     clips:      List[WordClip],
     vid_w:      int,
     vid_h:      int,
-    base_frame: np.ndarray,  # 🛡️ INJECTION: Force l'utilisation d'une frame existante
+    base_frame: np.ndarray,
 ) -> np.ndarray:
     
-    # On travaille sur une copie de la vraie image de la vidéo
     frame = np.copy(base_frame)
 
     for c in clips:
         if t < c.t_start or t > c.t_full_end:
             continue
 
-        entry_p   = min((t - c.t_start) / max(c.entry_dur, 1e-6), 1.0)
+        elapsed = t - c.t_start
         
-        # Animations d'entrée
-        if c.anim_in == "pop_overshoot":
-            alpha_in = min(entry_p * 3.0, 1.0) # Fade très rapide
-            y_pos    = c.target_y
-            # Overshoot mathématique : part de 0.5, monte à 1.15, revient à 1.0
-            scale    = 0.5 + 0.5 * ease_out_back(entry_p, overshoot=1.8)
-        elif c.anim_in == "fade_in":
-            alpha_in = ease_out_expo(entry_p)
-            y_pos    = c.target_y
-            scale    = 1.0
-        elif c.anim_in == "scale_fade":
-            alpha_in = ease_out_expo(entry_p)
-            y_pos    = c.target_y
-            scale    = 0.95 + 0.05 * alpha_in
-        else: # slide_up
-            alpha_in = ease_out_expo(entry_p)
-            dy       = int(c.slide_px_in * (1.0 - alpha_in))
-            y_pos    = c.target_y + dy
-            scale    = 1.0
+        # RÈGLE 3 : Interpolation "Pop" stricte basée sur le temps (sans fondu)
+        if elapsed <= 0.0:
+            scale = 0.01 # Invisible au temps 0
+        elif elapsed < 0.10:
+            # T=0s à T=0.1s : Explose de 0% à 115%
+            scale = 1.15 * (elapsed / 0.10)
+        elif elapsed < 0.15:
+            # T=0.1s à T=0.15s : Revient de 115% à 100% (Micro-rebond/Spring)
+            p = (elapsed - 0.10) / 0.05
+            scale = 1.15 - (0.15 * p)
+        else:
+            scale = 1.0
 
-        x_pos = c.target_x
-        alpha = min(1.0, alpha_in)
+        # Si l'échelle est trop petite, on passe la frame pour économiser du calcul
+        if scale < 0.02:
+            continue
 
-        # Animations de sortie
+        # Suppression Totale des Fondus (Alpha toujours à 100% à l'entrée)
+        alpha_in = 1.0 
+        y_pos    = c.target_y
+        x_pos    = c.target_x
+        alpha    = min(1.0, alpha_in)
+
+        # Animations de sortie (Conservées telles quelles mais le fondu peut être désactivé si besoin)
         if t >= c.t_exit_start:
             exit_p = min((t - c.t_exit_start) / max(c.exit_dur, 1e-6), 1.0)
 
             if c.anim_out == "hard_swipe_up":
-                exit_ease = ease_in_expo(exit_p) # Part lentement, explose à la fin
+                exit_ease = ease_in_expo(exit_p) 
                 y_pos    -= int(c.slide_px_out * exit_ease)
-                alpha     = alpha * (1.0 - exit_ease**2) # Disparaît sur les dernières frames
+                alpha     = alpha * (1.0 - exit_ease**2) 
             elif c.anim_out == "ghost_up":
                 exit_ease = ease_out_expo(exit_p)
                 y_pos    -= int(c.slide_px_out * exit_ease)
@@ -351,7 +339,7 @@ def _compose_frame(
 
 def group_into_tableaux(
     timeline:          List[Tuple[float, float, str]],
-    max_per_tableau:   int = 3,
+    max_per_tableau:   int = 3, # Règle 2 : Max 3 mots en même temps
 ) -> List[List[Tuple[float, float, str]]]:
     tableaux, current = [], []
 
@@ -390,23 +378,23 @@ class SubtitleBurner:
 
     VID_W = 1080
     VID_H = 1920
-    SAFE_W = 880              # V15 : ~80% de l'écran en largeur
-    CY     = 1920 // 2        # Centre parfait verticalement
+    SAFE_W = 880              
+    CY     = 1920 // 2        
 
-    # V15 : Typographie Géante (Pour réussir le Squint Test)
-    FS_IMPACT = 280           # Mots d'impact énormes (Les mots courts feront 1/3 écran)
-    FS_NORMAL = 180           # Mots standards (Très gros)
-    FS_STOP   = 120           # Mots de liaison (Discrets mais lisibles)
-    FS_BADGE  = 180           # Badges géants
+    # V16 : Typographie Géante
+    FS_IMPACT = 280           
+    FS_NORMAL = 200           
+    FS_STOP   = 140           
+    FS_BADGE  = 180           
 
-    GAP          = 45           # Espace augmenté pour aérer les polices géantes
+    GAP          = 45           
     ENTRY_DUR    = 0.18         
     STAGGER      = 0.08         
     EXIT_DUR     = 0.16         
     GHOST_OP     = 0.20         
     BREATH_GAP   = 0.20         
     SLIDE_IN_PX  = 80           
-    SLIDE_OUT_PX = 600          # Sortie expéditive vers le haut (Hard Wipe)
+    SLIDE_OUT_PX = 600          
 
     STOP_WORDS = {
         "le","la","les","un","une","des","ce","ces","de","du","à","au",
@@ -416,15 +404,15 @@ class SubtitleBurner:
         "pour","dans","vers","chez","c'est","the","a","an","in","on","at",
         "to","for","of","and","is","it","be","as","by","we","he","they","you"
     }
+    
+    # Règle 4 : Mots-clés mis à jour
     KEYWORDS_ACCENT = {
-        "profit","gain","hausse","succès","argent","million","croissance",
-        "résultat","stratégie","système","secret","clé","winner","champion",
-        "elite","premium","ratio","liquidité","banques","traders","trading",
-        "payout","funded","record","parfait","puissance","simplicité"
+        "argent", "succès", "secret", "outil", "profit", "gain", "winner", 
+        "croissance", "million", "stratégie", "champion"
     }
     KEYWORDS_MUTED = {
-        "perdre","perte","crash","chute","danger","stop","scam","arnaque",
-        "faillite","ruine","échec","jamais","alerte","attention","amateur"
+        "perdre", "perte", "crash", "danger", "scam", "arnaque", "échec",
+        "chute", "stop", "alerte", "attention", "faillite"
     }
 
     SFX_MAP = {
@@ -432,7 +420,7 @@ class SubtitleBurner:
         "ACCENT":  "click",
         "BADGE":   "click_deep",
         "MUTED":   "swoosh",
-        "STOP":    None,      # Pas de bruit pour les petits mots
+        "STOP":    None,      
         "PAUSE":   None,
     }
 
@@ -440,8 +428,8 @@ class SubtitleBurner:
         self,
         model_size:   str = "base",
         platform:     str = "shorts",
-        font:         str = "Inter-Black",     # V15 : Extra lourd par défaut
-        font_regular: str = "Inter-Medium",    # V15 : Plus propre pour liaison
+        font:         str = "Montserrat-Black",     
+        font_regular: str = "Montserrat-ExtraBold",    
         fontsize:     int = None,
     ):
         self.available    = WHISPER_AVAILABLE
@@ -456,7 +444,7 @@ class SubtitleBurner:
         mh     = int(1080 * 0.15)
 
         self.ass_header = f"""[Script Info]
-Title: Nexus V15 Massive Typography
+Title: Nexus V16 Hormozi Typography
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
@@ -522,29 +510,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         arrays = []
         anim_ins = []
 
-        # V15 : Analyse sémantique frame par frame avec polices gigantesques
         for idx, (start, end, text) in enumerate(entries):
             clean = self.strip_tags(text)
             sem   = self.get_semantic_class(text)
 
             is_badge = (sem == "BADGE" or bool(re.search(r'\d+[\$€%]|[\$€]\d+', clean)))
 
+            # Règle 2/4 : Force le style Pop et la colorimétrie Premium
             if sem == "STOP":
                 fs      = self.FS_STOP
-                bold    = False
                 color   = TEXT_DIM_RGB
-                anim_in = "fade_in"  # Discret
             elif sem in ["ACCENT", "MUTED", "ACTION"] or is_badge:
                 fs      = self.FS_IMPACT
-                bold    = True
                 color   = ACCENT_RGB if sem == "ACCENT" else (MUTED_RGB if sem == "MUTED" else TEXT_RGB)
-                anim_in = "pop_overshoot" if is_badge or sem in ["ACCENT", "MUTED"] else "slide_up"
             else:
                 fs      = self.FS_NORMAL
-                bold    = True
                 color   = TEXT_RGB
-                anim_in = "slide_up"
 
+            bold    = True # Force Bold partout pour la Règle 1
+            anim_in = "pop_overshoot" # Force le Pop partout pour la Règle 3
             anim_ins.append(anim_in)
 
             if is_badge:
@@ -568,11 +552,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
             stack_y += h + self.GAP
 
-            # Audio Pre-Strike (-0.04s pour que l'image frappe juste avant le son)
             t_start     = max(0.0, start + idx * self.STAGGER - 0.04)
             t_entry_end = t_start + self.ENTRY_DUR
 
-            # Hard Wipe à la sortie
             if next_tab_start is not None:
                 t_exit_start = next_tab_start - self.EXIT_DUR * 0.5
                 t_full_end   = next_tab_start + self.ENTRY_DUR
@@ -582,7 +564,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 t_full_end   = end + 0.1
                 anim_out     = "fade_out"
 
-            anim_in = "scale_fade" if is_conclusion else anim_ins[idx]
+            anim_in = "pop_overshoot" # On force le pop_overshoot
 
             word_clips.append(WordClip(
                 arr           = arr,
@@ -609,12 +591,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if not MOVIEPY_AVAILABLE:
             return video_clip
 
-        # 🛡️ FAIL-SAFE 1 : Si le script de sous-titres est vide, on sauvegarde la vidéo
         if not timeline or len(timeline) == 0:
             print("⚠️  [SubtitleBurner] Alerte: La timeline des sous-titres est vide. Rendu de la vidéo originale sans incrustation.")
             return video_clip
 
-        print(f"🎬  Massive Typography V15 — {len(timeline)} scènes…")
+        print(f"🎬  Massive Typography V16 (Premium DA) — {len(timeline)} scènes…")
 
         tableaux = group_into_tableaux(timeline, max_per_tableau=3)
         all_clips: List[WordClip] = []
@@ -638,24 +619,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         duration = video_clip.duration
         fps      = video_clip.fps or 30
 
-        # 🛡️ FAIL-SAFE 2 : Mise en cache pour éviter les crashs de codec MoviePy
         last_valid_frame = None
 
         def make_frame(t):
             nonlocal last_valid_frame
             try:
-                # Extraction de l'image de la vidéo générée par l'IA
                 base_frame = video_clip.get_frame(t)
                 last_valid_frame = base_frame
             except Exception as e:
-                # Si MoviePy plante sur une microseconde précise, on prend l'image précédente
                 if last_valid_frame is not None:
                     base_frame = last_valid_frame
                 else:
-                    # En dernier recours (t=0), une image noire
                     base_frame = np.zeros((vid_h, vid_w, 3), dtype=np.uint8)
                     
-            # On passe la vraie image au composeur (fini le fond statique)
             return _compose_frame(t, all_clips, vid_w, vid_h, base_frame=base_frame)
 
         from moviepy.editor import VideoClip as MpVideoClip
@@ -665,10 +641,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             sub_layer = sub_layer.set_audio(video_clip.audio)
 
         return sub_layer
-
-    # =========================================================================
-    # WHISPER PATH (génération ASS — inchangé)
-    # =========================================================================
 
     def _load_model(self):
         if not self.model and self.available:
