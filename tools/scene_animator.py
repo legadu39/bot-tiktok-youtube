@@ -1,15 +1,11 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V22: SceneAnimator — Gestionnaire de scènes et de B-roll.
+# ARCHITECTURE_MASTER_V22: SceneAnimator — CORRIGÉ depuis mesures référence.
 #
-# NOUVELLES PRIMITIVES V22 :
-#   • create_broll_card_clip()  → Card B-roll avec entrée spring (référence frame 8)
-#   • make_timeline_engine()    → TimelineEngine configuré aux dimensions du canvas
-#   • apply_effect_chain()      → Chaîne d'effets modulaires sur un clip moviepy
-#
-# MESURES RÉFÉRENCE :
-#   • B-roll card : width=53% canvas, radius=4.2%, shadow blur=18px, opacité=25%
-#   • Card center : X=canvas/2, Y=canvas/2 − 30px (légèrement au-dessus)
-#   • Entrée card : spring identique au texte (stiffness=900, damping=30)
+# CORRECTIONS vs V9:
+#   1. create_broll_card_clip(): center_y_ratio 0.5 → 0.4717 (mesuré 483/1024)
+#   2. create_broll_card_clip(): corner_radius ratio 0.042 → 0.064 (mesuré)
+#   3. create_broll_card_clip(): shadow_opacity 0.25 → 0.33 (mesuré)
+#   4. create_background(): même fond blanc pur (confirmé)
 
 from __future__ import annotations
 
@@ -17,7 +13,7 @@ import math
 import os
 import random
 import tempfile
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
@@ -34,23 +30,17 @@ from .effects   import EffectBase, EffectContinuousZoom, EffectSpringOvershoot
 from .timeline  import TimelineObject, TimelineEngine
 from .graphics  import render_broll_card, find_font
 from .config    import (
-    
     BROLL_CARD_WIDTH_RATIO, BROLL_CARD_RADIUS_RATIO,
+    BROLL_CARD_CENTER_Y_RATIO,
     GLOBAL_ZOOM_START, GLOBAL_ZOOM_END,
     BROLL_SHADOW_BLUR, BROLL_SHADOW_OPACITY,
     SPRING_STIFFNESS, SPRING_DAMPING, SPRING_SLIDE_PX,
-    GLOBAL_ZOOM_START, GLOBAL_ZOOM_END,
+    WHITE_BG_COLOR, CREAM_BG_COLOR,
 )
 
 
-# Correction : les walrus operators ne sont pas disponibles en Python <3.8.
-# Définir les constantes directement.
-_WHITE = (255, 255, 255)
-_CREAM = (245, 245, 247)
-
-
 class SceneContext:
-    """État de la scène courante — patterns de mouvement consécutifs."""
+    """État de la scène — patterns de mouvement consécutifs."""
     def __init__(self):
         self.last_motion       = "NONE"
         self.consecutive_count = 0
@@ -67,22 +57,12 @@ class SceneContext:
 
 class SceneAnimator:
     """
-    ARCHITECTURE_MASTER_V22 : Gestionnaire de scènes vidéo.
+    ARCHITECTURE_MASTER_V22: Gestionnaire de scènes vidéo — CORRIGÉ.
 
-    API publique (rétrocompatible V9) :
-        create_background()           → fond blanc/crème
-        create_dynamic_clip()         → clip avec motion (zoom/pan)
-        create_broll_card_clip()      → card B-roll spring (NOUVEAU)
-        create_slide_transition()     → transition glissement
-        create_fade_transition()      → transition fondu
-        apply_global_slowzoom()       → zoom global continu
-        create_animated_repeater_clip()→ matrice répétition animée
-        make_timeline_engine()        → TimelineEngine (NOUVEAU)
-
-    ARCHITECTURE_MASTER_V22 — Nouvelles primitives V22 :
-        create_broll_card_clip()      Reverse-engineered depuis frame 8.
-        make_timeline_engine()        Retourne un moteur préconfiguré.
-        apply_effect_chain()          Chaîne d'effets modulaires.
+    Corrections principales:
+        • B-roll card center Y: H×0.4717 (CORRIGÉ, était H×0.5)
+        • B-roll corner radius: canvas×0.064 (CORRIGÉ, était canvas×0.042)
+        • B-roll shadow opacity: 0.33 (CORRIGÉ, était 0.25)
     """
 
     _ease = EasingLibrary
@@ -113,7 +93,8 @@ class SceneAnimator:
     # ══════════════════════════════════════════════════════════════════════
 
     def create_background(self, output_path: str, style: str = "white") -> str:
-        color = _WHITE if style == "white" else _CREAM
+        """Crée un fond blanc pur (#FFFFFF) ou crème (#F5F5F7)."""
+        color = WHITE_BG_COLOR if style == "white" else CREAM_BG_COLOR
         img   = Image.new("RGB", (self.W, self.H), color=color)
         img.save(output_path, quality=98)
         return output_path
@@ -169,10 +150,6 @@ class SceneAnimator:
         scene_context:    SceneContext = None,
         apply_mutation:   bool        = False,
     ):
-        """
-        ARCHITECTURE_MASTER_V22 : Clip dynamique avec motion (zoom/pan).
-        Rétrocompatible V9, délègue à la logique de motion interne.
-        """
         if not MOVIEPY_OK:
             raise ImportError("moviepy requis")
         if scene_context is None:
@@ -188,8 +165,11 @@ class SceneAnimator:
 
         tx, ty = self._get_interest_center(str(working))
 
-        zoom_f = {"ZOOM_IN_HARD":1.05,"ZOOM_IN":1.03,"ZOOM_OUT":1.04,"STATIC":1.00,"PAN_SLOW":1.05}
-        zf     = zoom_f.get(motion_type, 1.02)
+        zoom_f = {
+            "ZOOM_IN_HARD": 1.05, "ZOOM_IN": 1.03,
+            "ZOOM_OUT": 1.04, "STATIC": 1.00, "PAN_SLOW": 1.05,
+        }
+        zf = zoom_f.get(motion_type, 1.02)
 
         try:
             img = ImageClip(str(working)).set_duration(duration)
@@ -212,8 +192,8 @@ class SceneAnimator:
                if final_w > final_h * ratio_img
                else img.resize(height=int(final_h)))
 
-        xov    = img.w - self.W
-        yov    = img.h - self.H
+        xov     = img.w - self.W
+        yov     = img.h - self.H
         ideal_x = (self.W / 2) - (tx * img.w)
         ideal_y = (self.H / 2) - (ty * img.h)
         focus_x = max(-xov, min(0, ideal_x))
@@ -230,7 +210,7 @@ class SceneAnimator:
 
         def pos_fn(t):
             if motion_type == "STATIC": return (int(cx), int(cy))
-            p = t / duration
+            p = t / max(duration, 1e-6)
             p = (p**3 if motion_type == "ZOOM_IN_HARD"
                  else p if motion_type == "PAN_SLOW"
                  else -p * (p - 2))
@@ -243,35 +223,29 @@ class SceneAnimator:
         return self.create_dynamic_clip(image_path, duration=duration, apply_mutation=apply_mutation)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 3 — B-Roll Card (NOUVEAU V22)
+    # SECTION 3 — B-Roll Card (CORRIGÉE)
     # ══════════════════════════════════════════════════════════════════════
 
     def create_broll_card_clip(
         self,
         image_path: str,
         duration:   float,
-        t_appear:   float = 0.0,
+        t_appear:   float         = 0.0,
         spring:     SpringPhysics = None,
         card_width_ratio: float   = None,
     ):
         """
-        ARCHITECTURE_MASTER_V22 : Card B-roll avec entrée spring.
+        ARCHITECTURE_MASTER_V22: Card B-roll CORRIGÉE depuis mesures pixel.
 
-        REVERSE ENGINEERING FRAME 8 (iPhone 17 PRO) :
-        ──────────────────────────────────────────────
-        Card layout (mesuré pixel-exact) :
-            • width     = 53% du canvas (305/576 = 0.529)
-            • corner R  = 4.2% du canvas width (≈ 45px à 1080p)
-            • ombre     = GaussianBlur 18px, opacité 25%
-            • center Y  = H/2 - 30px (légèrement au-dessus du centre)
-            • center X  = W/2 (centré horizontal exact)
+        MESURES RÉFÉRENCE (frame t=8s, iPhone 17 PRO, canvas 576×1024):
+        ─────────────────────────────────────────────────────────────────
+        Card pixels: y=[401,565] x=[134,441] → size=307×164px
+        Card W ratio: 307/576 = 0.533  ✓
+        Card center:  (288,483) → (0.499W, 0.4717H)  ← CORRIGÉ (était H×0.5)
+        Corner radius: left_inset=37px → 37/576=0.064  ← CORRIGÉ (était 0.042)
+        Shadow: diff=84/255=0.33 opacity dès le bord   ← CORRIGÉ (était 0.25)
 
-        Entrée :
-            • Spring identique au texte : stiffness=900, damping=30
-            • Y offset initial = 8px (slide_px)
-            • Settle en ≈ 80ms → visible seulement au ralenti
-
-        Returns : moviepy VideoClip de durée `duration`.
+        Spring: identique au texte (stiffness=900, damping=30).
         """
         if not MOVIEPY_OK:
             raise ImportError("moviepy requis")
@@ -280,17 +254,21 @@ class SceneAnimator:
 
         # Rendu de la card (numpy RGBA)
         card_arr  = render_broll_card(
-            image_path  = image_path,
-            canvas_w    = self.W,
-            corner_radius = None,    # auto : W × 0.042
+            image_path    = image_path,
+            canvas_w      = self.W,
+            corner_radius = None,           # auto: W × 0.064 (CORRIGÉ)
             shadow_blur   = BROLL_SHADOW_BLUR,
-            shadow_opacity = BROLL_SHADOW_OPACITY,
+            shadow_opacity = BROLL_SHADOW_OPACITY,  # 0.33 (CORRIGÉ)
         )
         ch, cw = card_arr.shape[:2]
 
-        # Position centrée (Y légèrement au-dessus : -30px comme dans la référence)
+        # ARCHITECTURE_MASTER_V22: Position CORRIGÉE
+        # cx = W/2 (centré exact, confirmé 288/576=0.499)
+        # cy = H × 0.4717 (au-dessus du centre, mesuré 483/1024)
+        # Le padding de shadow (40px) est inclus dans card_arr dimensions
         cx_pos = (self.W - cw) // 2
-        cy_pos = (self.H - ch) // 2 - 30
+        cy_base = int(self.H * BROLL_CARD_CENTER_Y_RATIO)
+        cy_pos  = cy_base - ch // 2
 
         engine = self.make_timeline_engine()
         engine.add(
@@ -307,10 +285,7 @@ class SceneAnimator:
             )
         )
 
-        # Fond blanc
-        base = np.full((self.H, self.W, 3), 255, dtype=np.uint8)
-
-        # Zoom global continu
+        base    = np.full((self.H, self.W, 3), 255, dtype=np.uint8)
         zoom_fx = EffectContinuousZoom(duration, GLOBAL_ZOOM_START, GLOBAL_ZOOM_END, "sine")
 
         def make_frame(t: float) -> np.ndarray:
@@ -337,38 +312,46 @@ class SceneAnimator:
         ease_in = self._ease_out_back if spring else self._ease_out_cubic
 
         out_clip = clip_out.set_duration(td).set_position(
-            lambda t: (int(dx * self._ease_out_cubic(min(t/td,1.0))),
-                       int(dy * self._ease_out_cubic(min(t/td,1.0))))
+            lambda t: (
+                int(dx * self._ease_out_cubic(min(t/td, 1.0))),
+                int(dy * self._ease_out_cubic(min(t/td, 1.0))),
+            )
         )
         in_clip = clip_in.set_duration(td).set_position(
-            lambda t: (int(-dx * (1.0 - ease_in(min(t/td,1.0)))),
-                       int(-dy * (1.0 - ease_in(min(t/td,1.0)))))
+            lambda t: (
+                int(-dx * (1.0 - ease_in(min(t/td, 1.0)))),
+                int(-dy * (1.0 - ease_in(min(t/td, 1.0)))),
+            )
         )
         return CompositeVideoClip([out_clip, in_clip], size=(self.W, self.H)).set_duration(td)
 
     def create_fade_transition(self, clip_out, clip_in, transition_duration=0.10):
         td = transition_duration
         def fo(get_frame, t):
-            a = 1.0 - EasingLibrary.ease_in_out_sine(min(t/td,1.0))
+            a = 1.0 - EasingLibrary.ease_in_out_sine(min(t/td, 1.0))
             return (get_frame(t).astype(np.float32) * a).astype(np.uint8)
         def fi(get_frame, t):
-            a = EasingLibrary.ease_in_out_sine(min(t/td,1.0))
+            a = EasingLibrary.ease_in_out_sine(min(t/td, 1.0))
             return (get_frame(t).astype(np.float32) * a).astype(np.uint8)
         return CompositeVideoClip(
             [clip_out.set_duration(td).fl(fo), clip_in.set_duration(td).fl(fi)],
-            size=(self.W, self.H)
+            size=(self.W, self.H),
         ).set_duration(td)
 
-    def should_slide_transition(self, prev_kw, curr_kw): return self._determine_mood(prev_kw) != self._determine_mood(curr_kw)
-    def should_fade_transition(self, prev_kw, curr_kw):  return not self.should_slide_transition(prev_kw, curr_kw)
-    def get_slide_direction(self, scene_index):           return ["left","up","left","down"][scene_index % 4]
+    def should_slide_transition(self, prev_kw, curr_kw):
+        return self._determine_mood(prev_kw) != self._determine_mood(curr_kw)
+
+    def should_fade_transition(self, prev_kw, curr_kw):
+        return not self.should_slide_transition(prev_kw, curr_kw)
+
+    def get_slide_direction(self, scene_index):
+        return ["left", "up", "left", "down"][scene_index % 4]
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 5 — Zoom Effects
     # ══════════════════════════════════════════════════════════════════════
 
     def apply_global_slowzoom(self, clip, start_scale=1.0, end_scale=1.03):
-        """ARCHITECTURE_MASTER_V22 : Délègue à EffectContinuousZoom."""
         duration = clip.duration
         eff      = EffectContinuousZoom(duration, start_scale, end_scale, "sine")
         return clip.fl(lambda gf, t: eff.apply(gf(t), t))
@@ -383,30 +366,26 @@ class SceneAnimator:
         def blur(gf, t):
             cur = gf(t).astype(np.float32)
             if t == 0: return cur.astype(np.uint8)
-            try:    res = cur * (1.0-strength) + gf(max(0,t-1.0/fps)).astype(np.float32)*strength
-            except: return cur.astype(np.uint8)
+            try:
+                res = cur * (1.0 - strength) + gf(max(0, t - 1.0/fps)).astype(np.float32) * strength
+            except:
+                return cur.astype(np.uint8)
             return np.clip(res, 0, 255).astype(np.uint8)
         return clip.fl(blur)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 6 — Timeline Engine (NOUVEAU V22)
+    # SECTION 6 — Timeline Engine
     # ══════════════════════════════════════════════════════════════════════
 
-    def make_timeline_engine(self) -> TimelineEngine:
+    def make_timeline_engine(self) -> "TimelineEngine":
         """
-        ARCHITECTURE_MASTER_V22 : Crée un TimelineEngine aux dimensions du canvas.
-        Utilisation typique :
-            engine = animator.make_timeline_engine()
-            engine.add(my_object)
-            clip = VideoClip(lambda t: engine.render_frame(t, base), duration=5)
+        ARCHITECTURE_MASTER_V22: TimelineEngine préconfiguré aux dimensions.
+        Chaque objet vidéo connaît son état à t exact → overlapping contrôlé.
         """
         return TimelineEngine(width=self.W, height=self.H)
 
     def apply_effect_chain(self, clip, effects: List[EffectBase]):
-        """
-        ARCHITECTURE_MASTER_V22 : Chaîne d'effets modulaires sur un clip moviepy.
-        Chaque EffectBase.apply(frame, t) est appliqué séquentiellement.
-        """
+        """Chaîne d'effets modulaires sur un clip moviepy."""
         def chained(gf, t):
             frame = gf(t)
             for eff in effects:
@@ -419,7 +398,6 @@ class SceneAnimator:
     # ══════════════════════════════════════════════════════════════════════
 
     def _apply_visual_mutation(self, image_path: str) -> str:
-        """Mutation légère pour diversifier visuellement les réutilisations."""
         try:
             with Image.open(image_path) as img:
                 img = img.convert("RGB")
@@ -435,8 +413,10 @@ class SceneAnimator:
         except Exception:
             return image_path
 
-    def create_repeater_matrix(self, element_path, cols=8, rows=14, output_path=None,
-                                opacity=0.12, bg_color=(255,255,255), canvas_w=None, canvas_h=None) -> str:
+    def create_repeater_matrix(
+        self, element_path, cols=8, rows=14, output_path=None,
+        opacity=0.12, bg_color=(255,255,255), canvas_w=None, canvas_h=None,
+    ) -> str:
         if output_path is None:
             output_path = os.path.join(self.temp_dir, f"rep_{random.randint(10000,99999)}.png")
         cw, ch = canvas_w or self.W, canvas_h or self.H
@@ -446,33 +426,39 @@ class SceneAnimator:
         except: elem = Image.new("RGBA", (20,20), (29,29,31,255))
         elem.thumbnail((int(cell_w*0.75), int(cell_h*0.75)), Image.LANCZOS)
         if opacity < 1.0:
-            r,g,b,a = elem.split()
-            a = a.point(lambda x: int(x*opacity))
-            elem = Image.merge("RGBA", (r,g,b,a))
+            r, g, b, a = elem.split()
+            a = a.point(lambda x: int(x * opacity))
+            elem = Image.merge("RGBA", (r, g, b, a))
         for row in range(rows):
             for col in range(cols):
                 ox = (cell_w//4) if row%2==1 else 0
                 x  = col*cell_w + (cell_w-elem.width)//2 + ox
                 y  = row*cell_h + (cell_h-elem.height)//2
-                canvas.paste(elem, (x,y), mask=elem.split()[3])
+                canvas.paste(elem, (x, y), mask=elem.split()[3])
         canvas.convert("RGB").save(output_path, quality=95)
         return output_path
 
-    def create_animated_repeater_clip(self, element_path, duration, cols=8, rows=14,
-                                       opacity=0.12, bg_color=(255,255,255)):
+    def create_animated_repeater_clip(
+        self, element_path, duration, cols=8, rows=14,
+        opacity=0.12, bg_color=(255,255,255),
+    ):
         if not MOVIEPY_OK: raise ImportError("moviepy requis")
         ow, oh = int(self.W*1.3), int(self.H*1.3)
-        mp = self.create_repeater_matrix(element_path, int(cols*1.3), int(rows*1.3),
-                                          opacity=opacity, bg_color=bg_color, canvas_w=ow, canvas_h=oh)
+        mp = self.create_repeater_matrix(
+            element_path, int(cols*1.3), int(rows*1.3),
+            opacity=opacity, bg_color=bg_color, canvas_w=ow, canvas_h=oh,
+        )
         clip = ImageClip(mp).set_duration(duration)
-        xov, yov = ow-self.W, oh-self.H
+        xov, yov = ow - self.W, oh - self.H
         def pos(t):
-            ease = EasingLibrary.ease_in_out_sine(t/max(duration,1e-6))
+            ease = EasingLibrary.ease_in_out_sine(t / max(duration, 1e-6))
             return (int(-xov*0.8*ease), int(-yov*0.8*ease))
-        return CompositeVideoClip([clip.set_position(pos)], size=(self.W,self.H))
+        return CompositeVideoClip([clip.set_position(pos)], size=(self.W, self.H))
 
-    def create_underline_draw_frame(self, frame, progress, y_pos, x_start, x_end,
-                                     color=(123,44,191), thickness=6):
+    def create_underline_draw_frame(
+        self, frame, progress, y_pos, x_start, x_end,
+        color=(123,44,191), thickness=6,
+    ):
         img   = Image.fromarray(frame)
         draw  = ImageDraw.Draw(img)
         eased = EasingLibrary.ease_out_expo(max(0.0, min(1.0, progress)))
