@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
 ### bot tiktok youtube/nexus_brain.py
+# ARCHITECTURE_MASTER_V22 — Corrections appliquées depuis analyse des logs (2026-03-15) :
+#
+#   FIX #1 — Import : tools.subtitle_burner → tools.burner (V22)
+#   FIX #2 — SubtitleBurner : params font/fontsize V9 → spring_stiffness/damping V22
+#   FIX #3 — _step_2_visuals : sanitisation visual_prompt + moteur B-Roll card
+#   FIX #4 — _step_4_assembly Whisper : garde-fou densité MIN_WORDS_PER_SECOND
+#             Si Whisper retourne <0.3 mot/s (silence synthétique TEST MODE),
+#             on conserve le timeline proportionnel au lieu de l'écraser.
+#   FIX #5 — render preset "medium" → "faster" (66% du temps de cycle économisé)
+#   FIX #6 — _step_1_ideation : garde-fou nombre de scènes MAX_SCENES
+
 import asyncio
 import sys
 import os
@@ -41,18 +52,66 @@ from prompts.templates import wrap_v3_prompt, get_manual_ingestion_prompt, get_b
 from tools.asset_vault import AssetVault
 from tools.tts_manager import OpenAITTS
 from tools.scene_animator import SceneAnimator
-from tools.subtitle_burner import SubtitleBurner
+# FIX #1 : SubtitleBurner migré de tools.subtitle_burner → tools.burner (V22).
+# tools/subtitle_burner.py est conservé comme shim de compatibilité pour les
+# autres imports éventuels dans le projet.
+from tools.burner import SubtitleBurner
 from fallback import FallbackProvider
+
 
 class SemanticException(Exception):
     """Exception levée quand l'IA hallucine ou ne respecte pas les règles sémantiques."""
     pass
 
+
+# FIX #3 : Mots-clés d'instructions renderer que l'IA met parfois dans visual_prompt.
+# Ces chaînes ne sont pas des sujets visuels — le vault ne peut pas les matcher.
+_VISUAL_PROMPT_RENDER_INSTRUCTIONS = [
+    "fond blanc", "fond noir", "background blanc", "background noir",
+    "#ffffff", "#000000", "strict", "aucun visuel", "no image",
+    "transition:", "slide", "fade",
+]
+
+
+def _sanitize_visual_prompt(raw_prompt: str) -> Optional[str]:
+    """
+    FIX #3 : Nettoie le champ visual_prompt issu du parser IA.
+
+    Si l'IA a mis une instruction de rendu ("FOND BLANC #FFFFFF STRICT..."),
+    on retourne None pour signaler qu'il faut utiliser le fond blanc par défaut
+    sans interroger le vault (évite 51 appels "No match" inutiles dans les logs).
+
+    Si le prompt est un vrai sujet visuel descriptif, on le renvoie normalement.
+    """
+    if not raw_prompt:
+        return None
+    low = raw_prompt.strip().lower()
+    for keyword in _VISUAL_PROMPT_RENDER_INSTRUCTIONS:
+        if keyword in low:
+            return None
+    # Longueur minimale d'un sujet visuel utile
+    if len(low) < 4:
+        return None
+    return raw_prompt.strip()
+
+
 class NexusBrain:
     """
-    🧠 NEXUS BRAIN V8.7 (TITANIUM PARSER — ANTI-CRASH & SMART TIMING)
-    ARCHITECTURE : Délègue l'intelligence à 'collect_cli.py'.
+    NEXUS BRAIN V9.0 — ARCHITECTURE_MASTER_V22
+    Construit sur V8.7 (Titanium Parser & Smart Timing).
+    Intègre les corrections issues de l'analyse des logs du 2026-03-15.
     """
+
+    # FIX #6 : Nombre de scènes maximum par vidéo.
+    # 51 scènes pour 40s = 0.78s/scène → l'œil n'a pas le temps de lire.
+    # Cible : 18-25 scènes pour 30-45s = 1.5-2s/scène minimum.
+    MAX_SCENES = 25
+
+    # FIX #4 : Seuil minimal de densité pour accepter le timeline Whisper.
+    # En dessous de 0.3 mot/seconde, l'audio est du silence (TEST MODE) ou
+    # une transcription dégénérée → on conserve le timeline proportionnel.
+    MIN_WHISPER_WORDS_PER_SECOND = 0.3
+
     def __init__(self):
         self.root_dir   = resolve_path("workspace")
         self.hot_root   = resolve_path("hot_folder")
@@ -84,13 +143,18 @@ class NexusBrain:
         self.fallback = FallbackProvider()
         self.animator = SceneAnimator()
 
-        # ── Phase 1 : Polices géométriques premium V8 (Inter prioritaire) ────
-        # AUDIT MISSION 1 : On désactive le fichier de config qui force l'ancienne DA !
-        # On impose la nouvelle typographie massive en dur.
+        # FIX #2 : SubtitleBurner V22.
+        # Paramètres calibrés depuis la vidéo référence (reverse engineering pixel-exact) :
+        #   spring_stiffness=900, damping=30 → settle ≈ 80ms (vs 200ms en V9)
+        #   1 mot par frame (split_to_single_words automatique dans burn_subtitles)
+        #   Exit HARD CUT (0 frame de fondu, vs fade en V9)
+        #   Gradient accent violet→mauve mesuré pixel (rgb(190,115,218)→rgb(134,108,169))
+        # Les anciens params font="Montserrat-Black", fontsize=200 sont supprimés —
+        # find_font() gère la cascade de polices et la réduction automatique.
         self.subtitle_burner = SubtitleBurner(
-            font="Montserrat-Black",
-            font_regular="Montserrat-ExtraBold",
-            fontsize=200
+            model_size       = "base",
+            spring_stiffness = 900,
+            spring_damping   = 30,
         )
 
         # ── Feature flags (config.json → section "video") ─────────────────
@@ -103,14 +167,14 @@ class NexusBrain:
         self.micro_zoom_intensity = video_cfg.get("micro_zoom_intensity",  0.008)
         self.bg_style             = video_cfg.get("background_style",      "white")
 
-        # ── Phase 4 : Durée minimale garantie d'une scène [PAUSE] ─────────
+        # ── Durée minimale garantie d'une scène [PAUSE] ───────────────────
         self.pause_min_duration = video_cfg.get("pause_min_duration", 1.0)
 
         self.last_run_date = None
         self.signals_dir   = Path("./temp_signals")
         self.signals_dir.mkdir(exist_ok=True)
 
-        jlog("info", msg="Nexus Brain V8.7 initialized (Titanium Parser & Smart Timing)")
+        jlog("info", msg="Nexus Brain V9.0 initialized (V22 Motion Engine + Log Fixes)")
 
     # -------------------------------------------------------------------------
     # INTELLIGENCE DÉLÉGUÉE & MÉMOIRE TRAUMATIQUE
@@ -121,7 +185,8 @@ class NexusBrain:
             try:
                 with open(hist_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except: pass
+            except Exception:
+                pass
         return {"last_error": None}
 
     def _write_healing_history(self, state: Dict):
@@ -129,7 +194,8 @@ class NexusBrain:
         try:
             with open(hist_file, "w", encoding="utf-8") as f:
                 json.dump(state, f)
-        except: pass
+        except Exception:
+            pass
 
     async def _invoke_cli_agent(self, prompt: str, context_tag: str = "general") -> Optional[str]:
         jlog("brain", msg=f"📡 Delegation to CLI Agent [Tag: {context_tag}]...")
@@ -172,7 +238,7 @@ class NexusBrain:
                 encoding='utf-8',
                 errors='replace'
             )
-            
+
             stdout, stderr = process.communicate(timeout=600)
 
             if process.returncode == 130:
@@ -197,7 +263,7 @@ class NexusBrain:
         except KeyboardInterrupt:
             if process:
                 process.kill()
-            raise 
+            raise
         except Exception as e:
             if process:
                 process.kill()
@@ -209,9 +275,12 @@ class NexusBrain:
     def _clean_buffer(self):
         try:
             for f in self.buffer_dir.glob("*.json"):
-                try: os.remove(f)
-                except: pass
-        except: pass
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _retrieve_latest_buffer_content(self) -> Optional[str]:
         try:
@@ -296,7 +365,7 @@ class NexusBrain:
                         tags.append(k)
                 detected_category = category.capitalize()
 
-        now     = datetime.now()
+        now      = datetime.now()
         day_tags = {0: "#NewWeek", 4: "#FridayFeeling", 5: "#WeekendVibes", 6: "#SundayReset"}
         if now.weekday() in day_tags:
             tags.append(day_tags[now.weekday()])
@@ -307,10 +376,10 @@ class NexusBrain:
         title = f"{clean_name} #{detected_category}"
 
         return {
-            "title":       title,
-            "description": f"Découvrez {clean_name}. \n\nABONNE-TOI pour plus de {detected_category}.",
-            "tags":        list(set(tags)),
-            "created_at":  str(datetime.now()),
+            "title":          title,
+            "description":    f"Découvrez {clean_name}. \n\nABONNE-TOI pour plus de {detected_category}.",
+            "tags":           list(set(tags)),
+            "created_at":     str(datetime.now()),
             "auto_generated": True
         }
 
@@ -319,13 +388,17 @@ class NexusBrain:
     # -------------------------------------------------------------------------
     def _get_recent_topics(self, limit: int = None) -> List[str]:
         try:
-            if not os.path.exists(self.history_file): return []
+            if not os.path.exists(self.history_file):
+                return []
             with open(self.history_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if not isinstance(data, list): return []
-                if limit: return data[-limit:]
+                if not isinstance(data, list):
+                    return []
+                if limit:
+                    return data[-limit:]
                 return data
-        except Exception: return []
+        except Exception:
+            return []
 
     def _save_topic_to_history(self, topic: str):
         try:
@@ -354,11 +427,11 @@ class NexusBrain:
                     continue
 
                 # INTELLIGENCE V8.7: Tolérance extrême sur les ":"
-                text_match  = re.search(r"TEXTE\s*:\s*(.*?)(?=\n(?:VISUEL|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
-                scene_text  = text_match.group(1).strip() if text_match else ""
+                text_match   = re.search(r"TEXTE\s*:\s*(.*?)(?=\n(?:VISUEL|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
+                scene_text   = text_match.group(1).strip() if text_match else ""
 
-                visuel_match  = re.search(r"VISUEL\s*:\s*(.*?)(?=\n(?:TEXTE|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
-                scene_visuel  = visuel_match.group(1).strip() if visuel_match else "abstract trading background"
+                visuel_match = re.search(r"VISUEL\s*:\s*(.*?)(?=\n(?:TEXTE|OVERLAY)|$)", block, re.IGNORECASE | re.DOTALL)
+                scene_visuel = visuel_match.group(1).strip() if visuel_match else "abstract trading background"
 
                 overlay_match = re.search(r"OVERLAY\s*:\s*(.*?)(?=\n|$)", block, re.IGNORECASE)
                 keywords      = [k.strip() for k in overlay_match.group(1).split(",")] if overlay_match else []
@@ -399,20 +472,20 @@ class NexusBrain:
     async def _step_0_brainstorm_topic(self) -> str:
         jlog("step", msg="Step 0: Brainstorming (CLI Delegation avec Titanium Parser)")
 
-        all_topics    = self._get_recent_topics(limit=None)
+        all_topics     = self._get_recent_topics(limit=None)
         recent_context = ", ".join(all_topics[-20:]) if all_topics else ""
-        day_theme     = self._get_smart_theme()
-        topic = None
-        
+        day_theme      = self._get_smart_theme()
+        topic          = None
+
         ai_context = f"Thème actuel imposé : '{day_theme}'. Sujets déjà traités récemment (à éviter) : {recent_context}."
-        
+
         previous_error = None
-        max_retries = 3
-        is_invalid = True
+        max_retries    = 3
+        is_invalid     = True
 
         for attempt in range(1, max_retries + 1):
             prompt = get_brainstorm_prompt(ai_context, previous_error)
-            
+
             raw_response = await self._invoke_cli_agent(prompt, context_tag=f"brainstorm_try_{attempt}")
 
             if not raw_response:
@@ -422,8 +495,8 @@ class NexusBrain:
 
             try:
                 topic_candidate = None
-                
-                # INTELLIGENCE V8.7 : Regex Indestructible (tolère les espaces et nettoie le gras markdown)
+
+                # INTELLIGENCE V8.7 : Regex Indestructible
                 title_match = re.search(r'(?:TITRE|TITLE)\s*:\s*(.+)', raw_response, re.IGNORECASE)
                 if title_match:
                     topic_candidate = title_match.group(1).strip(" \t\n\r\\\"'*")
@@ -435,24 +508,23 @@ class NexusBrain:
                             topic_candidate = data.get("title", "").strip(" \t\n\r\\\"'*")
                         except json.JSONDecodeError:
                             pass
-                
+
                 if not topic_candidate:
                     raise SemanticException("Format incompréhensible. Ni texte structuré (TITRE:), ni JSON valide trouvés.")
-                
+
                 # Validation Sémantique
                 t_low = topic_candidate.lower()
                 if any(k in t_low for k in ["error", "http", "://", "www.", ".com"]):
                     raise SemanticException(f"URL ou message d'erreur d'IA détecté dans le titre généré '{topic_candidate}'.")
-                    
+
                 title_len = len(topic_candidate)
                 if title_len < 5 or title_len > 80:
                     raise SemanticException(f"Longueur de titre anormale ({title_len} chars). Le titre DOIT être cohérent.")
-                    
+
                 if topic_candidate in all_topics:
                     raise SemanticException(f"Sujet dupliqué (déjà traité) : '{topic_candidate}'. Trouve un angle TOTALEMENT NOUVEAU.")
 
-                # Si on arrive ici, le contenu est parfait
-                topic = topic_candidate
+                topic      = topic_candidate
                 is_invalid = False
                 jlog("success", msg=f"Topic validé via Titanium Parser: {topic}")
                 break
@@ -530,7 +602,18 @@ class NexusBrain:
                     possible_json = json.loads(clean_json)
                     if "scenes" in possible_json:
                         script_data = possible_json
-                except: pass
+                except Exception:
+                    pass
+
+        # FIX #6 : Garde-fou nombre de scènes.
+        # L'IA génère parfois 50+ scènes pour une vidéo de 40s → 0.8s/scène.
+        # On tronque à MAX_SCENES en conservant les premières (hook + corps principal).
+        if script_data and "scenes" in script_data:
+            nb_scenes = len(script_data["scenes"])
+            if nb_scenes > self.MAX_SCENES:
+                jlog("warning", msg=f"Script trop long : {nb_scenes} scènes → tronqué à {self.MAX_SCENES}. "
+                                    f"Ajoutez la contrainte dans le prompt template pour éviter ce warning.")
+                script_data["scenes"] = script_data["scenes"][:self.MAX_SCENES]
 
         if script_data:
             return script_data
@@ -554,12 +637,29 @@ class NexusBrain:
     # ÉTAPE 2 : VISUALS
     # -------------------------------------------------------------------------
     async def _step_2_visuals(self, scenes: List[Dict]) -> List[str]:
-        jlog("step", msg=f"Step 2: Visual Asset (Fond {self.bg_style.upper()} — Phase V8)")
+        """
+        FIX #3 : Moteur visuel V22.
+
+        Deux changements majeurs par rapport à V8 :
+
+        1. Sanitisation du visual_prompt :
+           L'IA retournait "FOND BLANC #FFFFFF STRICT..." comme visual_prompt →
+           51 appels vault "No match" inutiles dans les logs.
+           _sanitize_visual_prompt() filtre les instructions de rendu et retourne
+           None si le prompt n'est pas un vrai sujet visuel.
+
+        2. Moteur B-Roll card V22 :
+           Si le vault trouve un asset pour le visual_prompt nettoyé,
+           render_broll_card() génère la card avec coins arrondis + ombre
+           (53% canvas, radius 4.2%, blur 18px) et la sauvegarde en PNG.
+           Sinon fallback fond blanc.
+        """
+        jlog("step", msg=f"Step 2: Visual Asset (Fond {self.bg_style.upper()} — V22 B-Roll Engine)")
 
         bg_filename = "bg_white_ffffff.jpg" if self.bg_style == "white" else "bg_cream_f5f5f7.jpg"
         bg_path     = os.path.join(self.root_dir, bg_filename)
 
-        # 🛡️ CORRECTION 1 : Détruire le fond pollué (qui contient le vieux texte gravé)
+        # Détruire le fond pollué (qui pourrait contenir du texte gravé)
         if os.path.exists(bg_path):
             try:
                 os.remove(bg_path)
@@ -569,7 +669,61 @@ class NexusBrain:
         self.animator.create_background(bg_path, style=self.bg_style)
         jlog("info", msg=f"Fond {self.bg_style} généré à neuf : {bg_filename}")
 
-        return [bg_path for _ in scenes]
+        # Import lazy pour éviter une dépendance circulaire au démarrage
+        try:
+            from tools.graphics import render_broll_card
+            from PIL import Image as _PILImage
+            broll_available = True
+        except ImportError:
+            broll_available = False
+            jlog("warning", msg="tools.graphics non disponible — B-Roll cards désactivées.")
+
+        asset_paths  = []
+        broll_count  = 0
+        skipped_count = 0
+
+        for i, scene in enumerate(scenes):
+            raw_prompt = scene.get("visual_prompt", "")
+
+            # FIX #3 : Nettoyage du prompt avant d'interroger le vault
+            clean_prompt = _sanitize_visual_prompt(raw_prompt)
+
+            if not clean_prompt:
+                # Prompt non-visuel (instruction renderer ou vide) → fond blanc direct
+                asset_paths.append(bg_path)
+                skipped_count += 1
+                continue
+
+            # Interrogation du vault uniquement si le prompt est un vrai sujet
+            matched_asset = self.vault.find_best_match(
+                clean_prompt,
+                context_tags=scene.get("keywords_overlay", []),
+                is_hook=(i == 0)
+            )
+
+            if matched_asset and os.path.exists(matched_asset.get("local_path", "")) and broll_available:
+                img_path = matched_asset["local_path"]
+                self.vault.mark_as_used(img_path)
+                try:
+                    card_arr  = render_broll_card(img_path, canvas_w=1080)
+                    card_path = os.path.join(
+                        self.root_dir,
+                        f"broll_{i:02d}_{uuid.uuid4().hex[:6]}.png"
+                    )
+                    _PILImage.fromarray(card_arr).save(card_path)
+                    asset_paths.append(card_path)
+                    broll_count += 1
+                    jlog("info", msg=f"  B-Roll card : scène {i+1} ← {Path(img_path).name}")
+                    continue
+                except Exception as e:
+                    jlog("warning", msg=f"  B-Roll card failed scène {i+1}: {e} → fond blanc")
+
+            asset_paths.append(bg_path)
+
+        jlog("info", msg=f"Visuels résolus : {broll_count} B-Roll + "
+                         f"{len(asset_paths) - broll_count} fonds blancs "
+                         f"({skipped_count} prompts non-visuels ignorés)")
+        return asset_paths
 
     # -------------------------------------------------------------------------
     # ÉTAPE 3 : AUDIO
@@ -580,12 +734,12 @@ class NexusBrain:
         def clean_for_tts(text: str) -> str:
             return re.sub(r'\[(BOLD|LIGHT|BADGE|PAUSE)\]', '', text).strip()
 
-        full_text = " ".join([clean_for_tts(s["text"]) for s in scenes])
+        full_text  = " ".join([clean_for_tts(s["text"]) for s in scenes])
         audio_path = await self.tts.generate(full_text, speed=speed)
-        
+
         if hasattr(self.tts, "last_generation_cached") and self.tts.last_generation_cached:
             jlog("warning", msg="🛡️ TEST MODE ACTIF ou Cache détecté. Vérifiez vos crédits ou votre config TTS.")
-            
+
         if not audio_path or not os.path.exists(audio_path):
             raise Exception("TTS Generation failed")
         return audio_path
@@ -610,22 +764,24 @@ class NexusBrain:
             audio_clip     = AudioFileClip(audio_path)
             total_duration = audio_clip.duration
             scenes         = script_data.get("scenes", [])
-            
+
             if not scenes:
                 raise ValueError("Aucune scène n'a été trouvée dans les données de script.")
 
             min_required_duration = len(scenes) * 0.35
             if total_duration < min_required_duration:
-                jlog("warning", msg=f"Audio trop court ({total_duration}s). Rallongement artificiel à {min_required_duration:.1f}s pour permettre l'animation des sous-titres.")
+                jlog("warning", msg=f"Audio trop court ({total_duration}s). Rallongement artificiel à "
+                                    f"{min_required_duration:.1f}s pour permettre l'animation des sous-titres.")
                 total_duration = min_required_duration
 
             def estimate_reading_weight(text: str) -> float:
-                clean = re.sub(r'\[.*?\]', '', text).strip()
+                clean  = re.sub(r'\[.*?\]', '', text).strip()
                 base_len = len(clean)
-                pauses = clean.count('.') * 8 + clean.count(',') * 3 + clean.count('!') * 5 + clean.count('?') * 5
+                pauses   = (clean.count('.') * 8 + clean.count(',') * 3
+                            + clean.count('!') * 5 + clean.count('?') * 5)
                 return float(base_len + pauses + 1)
 
-            weights = [estimate_reading_weight(s.get("text", "")) for s in scenes]
+            weights      = [estimate_reading_weight(s.get("text", "")) for s in scenes]
             total_weight = sum(weights)
 
             raw_durations = [(w / total_weight) * total_duration for w in weights]
@@ -663,14 +819,14 @@ class NexusBrain:
                 except ImportError:
                     scene_ctx = None
 
-                prev_keywords = ""
-                scenes_since_last_trans = 0 
+                prev_keywords           = ""
+                scenes_since_last_trans = 0
 
                 for i, (img_path, dur) in enumerate(zip(visual_assets, durations)):
                     if not os.path.isfile(str(img_path)):
                         continue
 
-                    curr_kw         = keywords_per_scene[i] if i < len(keywords_per_scene) else ""
+                    curr_kw          = keywords_per_scene[i] if i < len(keywords_per_scene) else ""
                     scene_transition = scenes[i].get("transition", "none") if i < len(scenes) else "none"
 
                     clip = self.animator.create_scene(
@@ -691,7 +847,7 @@ class NexusBrain:
 
                     if i > 0 and len(clips) > 0:
                         transition_applied = False
-                        
+
                         if scene_transition == "slide" and self.enable_slide_trans:
                             try:
                                 direction = self.animator.get_slide_direction(i)
@@ -699,7 +855,7 @@ class NexusBrain:
                                     clips[-1], clip,
                                     transition_duration=0.28,
                                     direction=direction,
-                                    spring=True 
+                                    spring=True
                                 )
                                 clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.28))
                                 clips.append(trans.set_duration(0.28))
@@ -720,7 +876,7 @@ class NexusBrain:
                                 transition_applied = True
                             except Exception as te:
                                 jlog("warning", msg=f"Fade skipped: {te}")
-                                
+
                         if transition_applied:
                             scenes_since_last_trans = 0
                         else:
@@ -742,19 +898,65 @@ class NexusBrain:
             if self.enable_motion_blur and not safe_mode:
                 video_track = self.animator.apply_motion_blur(video_track, strength=0.35)
 
+            # ── Timeline des sous-titres ──────────────────────────────────────
+            # Construction du timeline proportionnel (scène-niveau) de base.
             subtitle_timeline = []
             cursor = 0.0
             for i, d in enumerate(durations):
                 subtitle_timeline.append((cursor, cursor + d, scenes[i].get("text", "")))
                 cursor += d
 
+            # FIX #4 : Upgrade Whisper word-level avec garde-fou densité minimale.
+            #
+            # Problème observé dans les logs du 2026-03-15 :
+            #   - Audio = silence synthétique 40s (TEST MODE ElevenLabs absent)
+            #   - Whisper transcrit → 2 mots seulement
+            #   - Le code remplaçait les 51 scènes par ces 2 mots
+            #   - Résultat : vidéo de 40s avec seulement 2 mots visibles
+            #
+            # Solution : vérifier la densité (mots/seconde) avant de remplacer.
+            # Seuil = MIN_WHISPER_WORDS_PER_SECOND (0.3).
+            # Une vraie voix parlée = ~2-3 mots/seconde.
+            # Silence synthétique  = ~0.05 mots/seconde → rejeté.
+            if self.subtitle_burner.available:
+                try:
+                    jlog("info", msg="🎤 Whisper disponible — transcription word-level pour sync parfaite")
+                    word_timeline = self.subtitle_burner.transcribe_to_timeline(audio_path)
+
+                    if word_timeline and len(word_timeline) > 0:
+                        density = len(word_timeline) / max(total_duration, 1e-6)
+                        min_expected = total_duration * self.MIN_WHISPER_WORDS_PER_SECOND
+
+                        if len(word_timeline) >= min_expected:
+                            subtitle_timeline = word_timeline
+                            jlog("success", msg=f"  Word-level timeline : {len(word_timeline)} mots "
+                                               f"({density:.2f} mots/s) — timeline proportionnel remplacé.")
+                        else:
+                            jlog("warning", msg=f"  Whisper : {len(word_timeline)} mots pour "
+                                               f"{total_duration:.1f}s "
+                                               f"({density:.2f} mots/s < seuil {self.MIN_WHISPER_WORDS_PER_SECOND}). "
+                                               f"Probable silence synthétique (TEST MODE). "
+                                               f"Fallback sur timeline proportionnel conservé.")
+                    else:
+                        jlog("warning", msg="  Whisper transcript vide — timeline proportionnel conservé.")
+                except Exception as we:
+                    jlog("warning", msg=f"  Whisper échoué ({we}) — timeline proportionnel conservé.")
+
+            # ── Sound Design ──────────────────────────────────────────────────
+            # IMPORTANT : Le Sound Design utilise subtitle_timeline AVANT le
+            # remplacement Whisper (scène-niveau) pour coller aux transitions
+            # visuelles, pas aux mots individuels. On construit donc sfx_timeline
+            # séparément depuis les scènes originales.
             jlog("info", msg="🎧 Sound Design V8 (click / swoosh / click_deep / silence)…")
             sfx_clips = []
 
-            for start, end, text in subtitle_timeline:
-                sfx_type = self.subtitle_burner.get_sfx_type(text)
+            sfx_cursor = 0.0
+            for i, d in enumerate(durations):
+                scene_text = scenes[i].get("text", "")
+                sfx_type   = self.subtitle_burner.get_sfx_type(scene_text)
                 if sfx_type is None:
-                    continue  
+                    sfx_cursor += d
+                    continue
 
                 sfx_path = (
                     self.vault.get_random_sfx(sfx_type)
@@ -766,10 +968,11 @@ class NexusBrain:
                     try:
                         vol_map = {"click_deep": 0.28, "click": 0.22, "swoosh": 0.13}
                         vol     = vol_map.get(sfx_type, 0.18)
-                        sfx_c   = AudioFileClip(sfx_path).volumex(vol).set_start(start)
+                        sfx_c   = AudioFileClip(sfx_path).volumex(vol).set_start(sfx_cursor)
                         sfx_clips.append(sfx_c)
                     except Exception as se:
                         jlog("warning", msg=f"SFX skip: {se}")
+                sfx_cursor += d
 
             if sfx_clips:
                 final_audio = CompositeAudioClip([audio_clip] + sfx_clips)
@@ -779,31 +982,37 @@ class NexusBrain:
 
             final_clip = self.subtitle_burner.burn_subtitles(video_track, subtitle_timeline)
 
-            # AUDIT MISSION 2 : Cache Buster absolu
+            # ── Export ────────────────────────────────────────────────────────
             timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             unique_hash = str(uuid.uuid4())[:6]
-            suffix      = "_SAFE" if safe_mode else "_PREMIUM_DA_V16"
+            suffix      = "_SAFE" if safe_mode else "_PREMIUM_V22"
             filename    = f"nexus_final_{timestamp}_{unique_hash}{suffix}.mp4"
             output_path = os.path.join(self.root_dir, filename)
 
+            # FIX #5 : Preset "faster" pour les deux modes.
+            # "medium" prenait ~10min pour 40s de vidéo (66% du temps total).
+            # "faster" : ~3-4min, qualité quasi-identique en export 1080p30.
+            # Pour une qualité archivage maximale, repasser à "slow" manuellement.
             final_clip.write_videofile(
                 output_path,
-                fps=24 if safe_mode else 30,
-                codec="libx264",
-                audio_codec="aac",
-                preset="faster" if safe_mode else "medium",
-                threads=4,
-                logger=None
+                fps        = 24 if safe_mode else 30,
+                codec      = "libx264",
+                audio_codec= "aac",
+                preset     = "faster",      # FIX #5 : était "medium" en HQ, "faster" en safe
+                threads    = 4,
+                logger     = None
             )
 
             final_clip.close()
             audio_clip.close()
             for c in clips:
-                try: c.close()
-                except: pass
+                try:
+                    c.close()
+                except Exception:
+                    pass
 
             final_video_path = output_path
-            jlog("success", msg=f"✅ Vidéo Premium Motion : {filename}")
+            jlog("success", msg=f"✅ Vidéo Premium Motion V22 : {filename}")
 
         except Exception as e:
             if not safe_mode:
@@ -846,18 +1055,18 @@ class NexusBrain:
     # -------------------------------------------------------------------------
     async def _process_manual_ingestion(self, video_file: Path):
         jlog("info", msg=f"Processing manual file: {video_file.name}")
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = f"{video_file.stem}_{timestamp}{video_file.suffix}"
-        dest = self.root_dir / safe_name
-        
+        dest      = self.root_dir / safe_name
+
         shutil.move(str(video_file), str(dest))
 
         possible_meta = video_file.with_suffix('.json')
         if possible_meta.exists():
             shutil.move(str(possible_meta), str(dest.with_suffix('.json')))
         else:
-            smart_meta = self._heuristic_tagging(video_file.name)
+            smart_meta    = self._heuristic_tagging(video_file.name)
             prompt_manual = get_manual_ingestion_prompt(video_file.name)
 
             raw_ai = await self._invoke_cli_agent(prompt_manual, "manual_meta")
@@ -879,25 +1088,25 @@ class NexusBrain:
     # MODE DIRECTEUR ARTISTIQUE (FAST TEST)
     # -------------------------------------------------------------------------
     async def run_da_mode(self):
-        jlog("info", msg="🎨 FAST DA TEST MODE V8 ACTIVATED (Bypassing AI & TTS)")
+        jlog("info", msg="🎨 FAST DA TEST MODE V22 ACTIVATED (Bypassing AI & TTS)")
 
         script_data = {
             "meta": {
-                "title":     "TEST DA MODE V8 — Premium Motion",
+                "title":     "TEST DA MODE V22 — Premium Motion",
                 "tags":      ["test", "da", "premium"],
                 "tts_speed": 1.0
             },
             "scenes": [
-                {"text": "[LIGHT]90% [BOLD]des traders",    "visual_prompt": "abstract", "keywords_overlay": ["traders"],   "transition": "none"},
-                {"text": "[BOLD]perdent tout",               "visual_prompt": "abstract", "keywords_overlay": ["perdent"],   "transition": "none"},
-                {"text": "[LIGHT]leur argent.",              "visual_prompt": "abstract", "keywords_overlay": [],            "transition": "none"},
-                {"text": "[PAUSE]",                          "visual_prompt": "abstract", "keywords_overlay": [],            "transition": "none"},
-                {"text": "[LIGHT]Le vrai [BOLD]ratio",       "visual_prompt": "abstract", "keywords_overlay": ["ratio"],     "transition": "slide"},
-                {"text": "[BOLD]ratio [LIGHT]des banques",   "visual_prompt": "abstract", "keywords_overlay": ["ratio"],     "transition": "none"},
-                {"text": "[BADGE]179$",                      "visual_prompt": "abstract", "keywords_overlay": ["badge"],     "transition": "none"},
-                {"text": "[PAUSE]",                          "visual_prompt": "abstract", "keywords_overlay": [],            "transition": "none"},
-                {"text": "[BOLD]C'est possible.",            "visual_prompt": "abstract", "keywords_overlay": ["possible"],  "transition": "fade"},
-                {"text": "[LIGHT]mais [BOLD]pas pour tous.", "visual_prompt": "abstract", "keywords_overlay": [],            "transition": "none"},
+                {"text": "[LIGHT]90% [BOLD]des traders",    "visual_prompt": "trader devant écrans",      "keywords_overlay": ["traders"],  "transition": "none"},
+                {"text": "[BOLD]perdent tout",               "visual_prompt": "graphique rouge chute",     "keywords_overlay": ["perdent"],  "transition": "none"},
+                {"text": "[LIGHT]leur argent.",              "visual_prompt": "pièces dorées sol",         "keywords_overlay": [],           "transition": "none"},
+                {"text": "[PAUSE]",                          "visual_prompt": "",                          "keywords_overlay": [],           "transition": "none"},
+                {"text": "[LIGHT]Le vrai [BOLD]ratio",       "visual_prompt": "analyse technique chart",   "keywords_overlay": ["ratio"],    "transition": "slide"},
+                {"text": "[BOLD]ratio [LIGHT]des banques",   "visual_prompt": "immeuble banque finance",   "keywords_overlay": ["ratio"],    "transition": "none"},
+                {"text": "[BADGE]179$",                      "visual_prompt": "billet dollar argent",      "keywords_overlay": ["badge"],    "transition": "none"},
+                {"text": "[PAUSE]",                          "visual_prompt": "",                          "keywords_overlay": [],           "transition": "none"},
+                {"text": "[BOLD]C'est possible.",            "visual_prompt": "succès victoire trophée",   "keywords_overlay": ["possible"], "transition": "fade"},
+                {"text": "[LIGHT]mais [BOLD]pas pour tous.", "visual_prompt": "foule anonyme rue",         "keywords_overlay": [],           "transition": "none"},
             ]
         }
 
@@ -907,16 +1116,16 @@ class NexusBrain:
             jlog("info",  msg="Veuillez placer un fichier vocal nommé 'temp_audio.mp3' dans workspace/")
             return
 
-        jlog("info", msg="Génération des visuels de test (fond blanc #FFFFFF)…")
+        jlog("info", msg="Génération des visuels de test…")
         imgs = await self._step_2_visuals(script_data["scenes"])
 
         vid = await self._step_4_assembly(script_data, imgs, audio_path, safe_mode=False)
 
         if vid:
-            jlog("success", msg=f"✅ Test DA V8 terminé ! Vidéo : {vid}")
+            jlog("success", msg=f"✅ Test DA V22 terminé ! Vidéo : {vid}")
 
     async def run_daemon(self):
-        jlog("info", msg="Nexus Brain V8 Daemon Started (Premium Motion Mode)")
+        jlog("info", msg="Nexus Brain V9.0 Daemon Started (V22 Motion Engine)")
 
         while True:
             manual_files = sorted(list(self.hot_root.glob("*.*")))
@@ -952,10 +1161,10 @@ class NexusBrain:
                         self.last_run_date = current_date
                         jlog("success", msg=f"Daily cycle complete for {current_date}")
                 else:
-                    jlog("error", msg="Script généré invalide (absence de la clé 'scenes'). Abandon du cycle pour éviter le crash.")
+                    jlog("error", msg="Script généré invalide (absence de la clé 'scenes'). Abandon du cycle.")
 
             except asyncio.CancelledError:
-                raise 
+                raise
             except KeyboardInterrupt:
                 jlog("info", msg="Brain stopped by user (Graceful exit).")
                 sys.exit(0)
@@ -965,9 +1174,10 @@ class NexusBrain:
 
             await asyncio.sleep(60)
 
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Nexus Brain V8")
+    parser = argparse.ArgumentParser(description="Nexus Brain V9.0 (V22 Motion Engine)")
     parser.add_argument("--da", action="store_true", help="Lance le mode DA pour tester le montage sans requêtes API.")
     args, _ = parser.parse_known_args()
 

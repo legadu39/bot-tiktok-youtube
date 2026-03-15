@@ -1,9 +1,35 @@
 # -*- coding: utf-8 -*-
+# ARCHITECTURE_MASTER_V22: SmartLayoutManager — Gestionnaire d'espace intelligent.
+#
+# Fonctions :
+#   1. Détection collision entre rectangles
+#   2. Réduction automatique de fontsize si texte trop large
+#   3. Layout vertical centré pour N éléments
+#   4. Retour à la ligne automatique
+
+from __future__ import annotations
 from typing import Callable, List, Tuple
 from PIL import Image, ImageDraw
 
+
 class SmartLayoutManager:
-    def __init__(self, canvas_w: int, canvas_h: int, safe_left: int = 80, safe_right: int = 80, safe_top: int = 200, safe_bottom: int = 350):
+    """
+    ARCHITECTURE_MASTER_V22 : Gestionnaire d'espace.
+
+    Zone safe (safe_zone) = rectangle dans lequel tous les éléments doivent tenir.
+    Par défaut calibré sur la référence :
+        safe_left=80, safe_right=80, safe_top=200, safe_bottom=350
+    """
+
+    def __init__(
+        self,
+        canvas_w:    int,
+        canvas_h:    int,
+        safe_left:   int = 80,
+        safe_right:  int = 80,
+        safe_top:    int = 200,
+        safe_bottom: int = 350,
+    ):
         self.W = canvas_w
         self.H = canvas_h
         self.safe_x1 = safe_left
@@ -13,11 +39,21 @@ class SmartLayoutManager:
         self.safe_w  = self.safe_x2 - self.safe_x1
         self.safe_h  = self.safe_y2 - self.safe_y1
 
-    def fit_fontsize(self, text: str, font_fn: Callable, max_size: int, min_size: int = 30) -> int:
+    def fit_fontsize(
+        self,
+        text:     str,
+        font_fn:  Callable,
+        max_size: int,
+        min_size: int = 30,
+    ) -> int:
+        """
+        ARCHITECTURE_MASTER_V22 : Réduit fontsize jusqu'à ce que le texte
+        tienne dans safe_w. Retourne le fontsize optimal.
+        """
         size = max_size
         while size >= min_size:
             try:
-                font = font_fn(size)
+                font  = font_fn(size)
                 dummy = Image.new("RGBA", (1, 1))
                 d     = ImageDraw.Draw(dummy)
                 bbox  = d.textbbox((0, 0), text, font=font)
@@ -29,12 +65,27 @@ class SmartLayoutManager:
             size -= 4
         return min_size
 
-    def collides(self, rect_a: Tuple[int, int, int, int], rect_b: Tuple[int, int, int, int], margin: int = 10) -> bool:
+    def collides(
+        self,
+        rect_a: Tuple[int, int, int, int],
+        rect_b: Tuple[int, int, int, int],
+        margin: int = 10,
+    ) -> bool:
         ax, ay, aw, ah = rect_a
         bx, by, bw, bh = rect_b
-        return not (ax + aw + margin < bx or bx + bw + margin < ax or ay + ah + margin < by or by + bh + margin < ay)
+        return not (
+            ax + aw + margin < bx or
+            bx + bw + margin < ax or
+            ay + ah + margin < by or
+            by + bh + margin < ay
+        )
 
-    def resolve_overlaps(self, rects: List[Tuple[int, int, int, int]], gap: int = 20) -> List[Tuple[int, int, int, int]]:
+    def resolve_overlaps(
+        self,
+        rects: List[Tuple[int, int, int, int]],
+        gap:   int = 20,
+    ) -> List[Tuple[int, int, int, int]]:
+        """Déplace les rectangles vers le bas jusqu'à résolution de tous les conflits."""
         resolved = list(rects)
         for i in range(1, len(resolved)):
             for j in range(i):
@@ -43,27 +94,37 @@ class SmartLayoutManager:
                     resolved[i] = (x, y + gap, w, h)
         return resolved
 
-    def vertical_center_layout(self, heights: List[int], gap: int = 20, cy_anchor: int = None) -> List[int]:
-        cy = cy_anchor if cy_anchor is not None else self.H // 2
+    def vertical_center_layout(
+        self,
+        heights:   List[int],
+        gap:       int = 20,
+        cy_anchor: int = None,
+    ) -> List[int]:
+        """Retourne les positions Y pour N éléments empilés verticalement centrés."""
+        cy      = cy_anchor if cy_anchor is not None else self.H // 2
         total_h = sum(heights) + gap * (len(heights) - 1)
         start_y = cy - total_h // 2
-        ys = []
-        y  = start_y
+        ys, y   = [], start_y
         for h in heights:
             ys.append(y)
             y += h + gap
         return ys
 
-    def wrap_text(self, text: str, font_fn: Callable, size: int, max_w: int = None) -> List[str]:
+    def wrap_text(
+        self,
+        text:    str,
+        font_fn: Callable,
+        size:    int,
+        max_w:   int = None,
+    ) -> List[str]:
+        """Retour à la ligne automatique — coupe en lignes ≤ max_w pixels."""
         max_w  = max_w or self.safe_w
         words  = text.split()
-        lines  = []
-        current = []
+        lines, current = [], []
         try:
             font  = font_fn(size)
             dummy = Image.new("RGBA", (1, 1))
             d     = ImageDraw.Draw(dummy)
-
             for word in words:
                 test = " ".join(current + [word])
                 bbox = d.textbbox((0, 0), test, font=font)

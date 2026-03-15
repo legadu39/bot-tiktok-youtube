@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 class SceneContext:
+    """ARCHITECTURE_MASTER_V22 : État de la scène — patterns de mouvement consécutifs."""
     def __init__(self):
         self.last_motion       = "NONE"
         self.consecutive_count = 0
