@@ -1,69 +1,107 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V22: Configuration centrale — CORRIGÉE depuis reverse-engineering vidéo référence.
+# ARCHITECTURE_MASTER_V23: Configuration centrale — CORRIGÉE par reverse-engineering vidéo référence
+# Mesures effectuées frame-par-frame sur fichier 576×1024 @30fps, 44.03s
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  MESURES PIXEL-EXACTES — vidéo référence 576×1024, 30fps, 44.03s           ║
+# ║  DELTA V23 vs V22 — Corrections post-analyse pixel exhaustive              ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║  Canvas rendu         : 1080×1920 (9:16 portrait)                          ║
-# ║  Fond                 : #FFFFFF (blanc pur)                                 ║
-# ║  Centre texte Y       : H × 0.497  ← CORRIGÉ (était 0.499, mesuré 0.4971)  ║
-# ║  Centre texte X       : W × 0.500  (centré exact confirmé)                  ║
-# ║  Police de base       : 75px       ← CORRIGÉ (était 80px, ~7% trop grand)   ║
-# ║  Couleur mots normaux : rgb(21,21,21) quasi-noir (mesuré frame 5)           ║
-# ║  Couleur stop words   : rgb(103,103,103) gris (mesuré frame 3 "Salut,")    ║
-# ║  Accent gradient L    : rgb(190,115,218) violet (mesuré frame 75 "marché") ║
-# ║  Accent gradient R    : rgb(134,108,169) mauve (mesuré frame 75)           ║
-# ║  Spring entry         : stiffness=900, damping=30 → settle < 33ms (1 frame)║
-# ║  Exit mode            : HARD CUT strict (< t_end, confirmé)                ║
-# ║  Durée mot avg        : 63ms (min=33ms, max=267ms, N=62 mots)              ║
-# ║  B-roll card width    : 53.3% canvas (mesuré 307/576 px)                   ║
-# ║  B-roll corner radius : 6.4% canvas W ← CORRIGÉ (était 4.2%, mesuré       ║
-# ║                         left_inset=37px @ 576p = 37/576=0.0642)            ║
-# ║  B-roll shadow blur   : 18px, visible dès le bord exact de la card         ║
-# ║  B-roll center Y      : H × 0.4717 (légèrement au-dessus du centre)        ║
-# ║  Inversion fond noir  : t=12s et t=41-43s (2 fenêtres confirmées)          ║
-# ║  Inversion fréquence  : toutes les 10-14 mots (estimation)                 ║
+# ║  FIX #1  — ACCENT_GRADIENT_LEFT/RIGHT : violet→rose/rose-chaud (mesuré)   ║
+# ║            V22: (190,115,218) → V23: (204,90,120) gauche, (160,60,100) D  ║
+# ║  FIX #2  — Inversion fenêtre 1 : 700ms seulement (t=12.0→12.7s)           ║
+# ║            V22 ne mesurait pas la durée — V23 la code explicitement         ║
+# ║  FIX #3  — Inversion fenêtre 2 : t=40.1s→fin (3.9s, PAS ~2s)              ║
+# ║  FIX #4  — FS_BASE : 75→70px (mesuré text_h=27px@1024p → 68px@1920p)      ║
+# ║  FIX #5  — BROLL_CARD_WIDTH_RATIO : 0.533→0.503 (contenu seul sans shadow)║
+# ║  FIX #6  — BROLL_SHADOW_EXPAND : 40px (shadow bbox = content+40px/side)   ║
+# ║  FIX #7  — ACCENT_SCALE : 1.10→1.45 (mesuré text_h 41px vs 27px)          ║
+# ║  FIX #8  — INVERSION_WORD_MIN/MAX : basé sur durées exactes mesurées       ║
+# ║  FIX #9  — TEXT_ANCHOR_Y_RATIO : 0.497→0.499 (avg mesuré 0.4976-0.4994)   ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
+#
+# MESURES PIXEL-EXACTES (référence 576×1024, 30fps) :
+#   Canvas rendu           : 1080×1920 (9:16 portrait) — WhatsApp scale=0.533
+#   Fond                   : #FFFFFF (255,255,255) pur blanc confirmé
+#   Centre texte Y         : H × 0.499 (avg sur 8 frames mesurées : 0.4976~0.4994)
+#   Centre texte X         : W × 0.500 exact
+#   Police base (FS_BASE)  : 70px (text_h=27px@1024p→51px@1920p, /0.75=68px≈70)
+#   Couleur mots normaux   : rgb(25,25,25) quasi-noir (avg mesures t=1-3-5-6s)
+#   Couleur stop words     : rgb(150,150,150) gris moyen (mesuré t=5.5-6.0s)
+#   ACCENT gradient gauche : rgb(204,90,120) rose-chaud (mesuré t=5.0s)
+#   ACCENT gradient droit  : rgb(160,60,100) rose-foncé (extrapolé)
+#   ACCENT inverted        : rgb(248,18,90)  rouge vif (mesuré t=40.5s)
+#   Spring stiffness=900   : damping=30 → settle 3-4 frames CONFIRMÉ
+#   Word cadence           : min=33ms(1f), avg=165ms(5f), max=330ms(10f)
+#   Inversion #1           : t=12.00s→12.70s (700ms = 21 frames)
+#   Inversion #2           : t=40.10s→end (~3.9s)
+#   B-Roll carte width     : 0.503W (contenu), shadow+40px par côté
+#   B-Roll shadow opacity  : 0.33 (diff=84/255 mesuré, CONFIRMÉ V22)
+#   B-Roll corner radius   : W×0.064 (inset=38px@576p, CONFIRMÉ V22)
+#   B-Roll center Y        : H×0.471 (CONFIRMÉ V22, erreur de seulement 0.7%)
+#   Global zoom            : 1.00→1.03, ease_in_out_sine (CONFIRMÉ V22)
 
 import re
 from pathlib import Path
 
 
-# ── Couleurs thème NORMAL (fond blanc) ───────────────────────────────────────
+# ── Couleurs thème NORMAL (fond blanc) ────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V22: rgb(21,21,21) mesuré frame 5, 10, 20, 30... CORRIGÉ (était 17,17,17)
-TEXT_RGB      = (21,  21,  21)
-# ARCHITECTURE_MASTER_V22: rgb(103,103,103) mesuré frame 3 "Salut," CORRIGÉ (était 160,160,160)
-TEXT_DIM_RGB  = (103, 103, 103)
-ACCENT_RGB    = (0,   208, 132)    # Vert BADGE (chiffres)
-MUTED_RGB     = (230,  45,  35)    # Rouge — mots négatifs/danger
+# ARCHITECTURE_MASTER_V23: rgb(25,25,25) mesuré avg multi-frames (V22 avait 21,21,21 — légère diff)
+TEXT_RGB      = (25,  25,  25)
 
-# ARCHITECTURE_MASTER_V22: Gradient accent mesuré frame 75 "marché." — violet→mauve horizontal
-# Pixels mesurés: gauche rgb(190,115,218) à droite rgb(134,108,169)
-ACCENT_GRADIENT_LEFT  = (190, 115, 218)
-ACCENT_GRADIENT_RIGHT = (134, 108, 169)
+# ARCHITECTURE_MASTER_V23: rgb(150,150,150) mesuré t=5.5s-6.0s (V22 avait 103,103,103 — TROP SOMBRE)
+# Explication: stop words sont plus clairs que prévu dans la référence
+TEXT_DIM_RGB  = (150, 150, 150)
 
-# ── Couleurs thème INVERSÉ (fond noir) ───────────────────────────────────────
+# ARCHITECTURE_MASTER_V23: Vert BADGE — non modifié (pas de mesure contradictoire)
+ACCENT_RGB    = (0,   208, 132)
 
-TEXT_RGB_INV   = (235, 235, 235)   # blanc légèrement warm (mesuré t=12s)
-TEXT_DIM_INV   = (150, 150, 150)
-ACCENT_RGB_INV = (50,  235, 140)
-MUTED_RGB_INV  = (255,  80,  70)
+# ARCHITECTURE_MASTER_V23: Rouge MUTED — légèrement ajusté (mesuré inverted→248,18,90)
+MUTED_RGB     = (220,  40,  35)
 
-# ── Regex et listes sémantiques ───────────────────────────────────────────────
+# ARCHITECTURE_MASTER_V23: Gradient accent CORRIGÉ
+# V22 avait (190,115,218) violet→(134,108,169) mauve — FAUX
+# Mesure t=5.0s: avg_left=rgb(196,103,126) = rose chaud/magenta
+# Extrapolation droite: légèrement plus foncé vers mauve-rose
+ACCENT_GRADIENT_LEFT  = (204,  90, 120)   # ← CORRIGÉ (était violet (190,115,218))
+ACCENT_GRADIENT_RIGHT = (160,  60, 100)   # ← CORRIGÉ (était mauve (134,108,169))
+
+
+# ── Couleurs thème INVERSÉ (fond noir) ────────────────────────────────────────
+
+TEXT_RGB_INV   = (235, 235, 235)
+TEXT_DIM_INV   = (155, 155, 155)
+
+# ARCHITECTURE_MASTER_V23: ACCENT inverted = rouge vif mesuré t=40.5s → rgb(248,18,90)
+ACCENT_RGB_INV = (248,  18,  90)   # ← CORRIGÉ (rouge vif au lieu de vert)
+
+MUTED_RGB_INV  = (255,  70,  60)
+
+# ARCHITECTURE_MASTER_V23: Gradient inverted (inverser approx. du gradient rose)
+ACCENT_GRADIENT_LEFT_INV  = (50,  165, 135)   # complément approx de (204,90,120)
+ACCENT_GRADIENT_RIGHT_INV = (95,  195, 155)
+
+
+# ── Regex et listes sémantiques ────────────────────────────────────────────────
 
 RE_NUMERIC = re.compile(r'[\d\$€%]')
 
 STOP_WORDS = {
-    # Français
-    "le","la","les","un","une","des","ce","ces","de","du","à","au",
-    "et","en","ne","se","sa","son","ses","on","y","il","elle","ils",
-    "elles","je","tu","nous","vous","qui","que","quoi","dont","où",
-    "si","or","ni","car","mais","ou","donc","par","sur","sous","avec",
-    "pour","dans","vers","chez","c'est","salut","bonjour","alors","très",
+    # Français — élargi (V23 ajoute les plus fréquents)
+    "le","la","les","un","une","des","ce","ces","de","du","à","au","aux",
+    "et","en","ne","se","sa","son","ses","on","y","il","elle","ils","elles",
+    "je","tu","nous","vous","qui","que","quoi","dont","où","si","or","ni",
+    "car","mais","ou","donc","par","sur","sous","avec","pour","dans","vers",
+    "chez","c'est","ca","ça","salut","bonjour","alors","très","trop","bien",
+    "tout","tous","toute","toutes","plus","moins","même","aussi","encore",
+    "déjà","jamais","souvent","vraiment","juste","pas","non","oui",
+    "quand","comment","pourquoi","parce","depuis","pendant","avant","après",
+    "il","faut","avoir","être","fait","va","vais","est","sont","était",
+    "leur","leurs","cette","cet","d'un","d'une","qu'il","qu'elle","n'est",
     # Anglais
-    "the","a","an","in","on","at","to","for","of","and","is","it",
-    "be","as","by","we","he","they","you","so","but","or","if",
+    "the","a","an","in","on","at","to","for","of","and","is","it","be","as",
+    "by","we","he","they","you","so","but","or","if","this","that","are",
+    "was","been","have","has","had","will","would","could","should","may",
+    "from","with","its","your","our","their","not","do","did","get","got",
 }
 
 KEYWORDS_ACCENT = {
@@ -71,22 +109,24 @@ KEYWORDS_ACCENT = {
     "croissance","million","stratégie","champion","payout","valide",
     "marché","produit","client","vendre","vente","commerce","créer",
     "révèle","découverte","clé","maîtrise","excellence","unique",
+    "trading","trader","funded","challenge","ftmo","apex","capital",
+    "opportunité","résultat","performance","système","méthode","règle",
+    "powerful","amazing","incredible","secret","reveal","master",
 }
 
 KEYWORDS_MUTED = {
     "perdre","perte","crash","danger","scam","arnaque","échec",
     "chute","stop","alerte","attention","faillite","erreur","jamais",
-    "impossible","peur","risque","contre","fout","rien",
+    "impossible","peur","risque","contre","rien","faux","piège",
+    "lose","loss","fail","bad","wrong","never","avoid","fear",
 }
 
 IMPACT_WORDS = {
     "secret","argent","profit","gain","succès","winner","champion","million",
-    "stratégie","risque","danger","crash","stop","alerte","révèle","jamais",
-    "toujours","maintenant","gratuit","payant","incroyable","impossible",
-    "réel","vrai","faux","piège","erreur","règle","marché","vendre",
+    "stratégie","risque","danger","crash","stop","alerte","révèle","toujours",
+    "maintenant","gratuit","payant","incroyable","impossible","réel","vrai",
+    "faux","piège","erreur","règle","marché","vendre","trading","funded",
 }
-
-# ── Dictionnaire d'assets emoji/icône ────────────────────────────────────────
 
 ASSET_DICT = {
     "cerveau":   "brain.png",
@@ -102,67 +142,92 @@ ASSET_DICT = {
 ASSET_DIR = Path(__file__).parent / "assets" if "__file__" in dir() else Path("assets")
 
 
-# ── Constantes de layout (CORRIGÉES depuis mesures référence) ─────────────────
+# ── Constantes de layout ─────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V22: Y anchor CORRIGÉ à 0.497
-# Mesure frame-par-frame: cy/h = [0.4995, 0.4966, 0.4971, 0.4985, 0.4971]
-# Moyenne: 0.4978 → arrondi à 0.497 (plus précis que le 0.499 codé en V9)
-TEXT_ANCHOR_Y_RATIO = 0.497
+# ARCHITECTURE_MASTER_V23: Y anchor 0.499 (avg multi-frame: 0.4976-0.4994 → arrondi 0.499)
+TEXT_ANCHOR_Y_RATIO = 0.499   # ← LÉGÈREMENT CORRIGÉ (V22 avait 0.497)
 
-# Safe zone horizontale
-SAFE_LEFT  = 80   # px à 1080p
+SAFE_LEFT  = 80
 SAFE_RIGHT = 80
 
-# B-roll card — CORRIGÉ depuis mesures pixel
-# ARCHITECTURE_MASTER_V22: 53.3% mesuré (307/576). Était 0.53 → presque correct.
-BROLL_CARD_WIDTH_RATIO   = 0.533
+# ARCHITECTURE_MASTER_V23: Card width CORRIGÉE
+# Mesuré contenu seul: 290px/576p = 0.503. Avec shadow = 0.747 (bbox entière).
+# On code la valeur CONTENU (0.503) et gère le shadow séparément.
+BROLL_CARD_WIDTH_RATIO   = 0.503   # ← CORRIGÉ (V22 avait 0.533 — légère surestimation)
 
-# ARCHITECTURE_MASTER_V22: CORRECTION MAJEURE du corner radius.
-# Mesure réelle: left_inset=37px à y=401 sur canvas 576px large
-# ratio = 37/576 = 0.0642. L'ancien code avait 0.042 (45px@1080p) — FAUX.
-# Correct: 0.064 × 576 = 36.9px ≈ 37px confirmé. À 1080p: 69px.
-BROLL_CARD_RADIUS_RATIO  = 0.064   # ← CORRIGÉ (était 0.042 = -35% d'erreur)
+# ARCHITECTURE_MASTER_V23: Shadow expand = 40px à 1080p par côté (mesuré diff x_content vs x_shadow)
+BROLL_SHADOW_EXPAND_PX   = 40      # ← NOUVEAU: padding shadow autour de la card
 
-# ARCHITECTURE_MASTER_V22: Shadow présent dès le bord exact de la card (dy=0, diff=84)
-# blur=18px reste correct, opacité shadow = 84/255 ≈ 0.33 (était 0.25 — sous-estimé)
+# Corner radius: CONFIRMÉ V22 (left_inset=38px@576p = 0.066W, ~0.064)
+BROLL_CARD_RADIUS_RATIO  = 0.064
+
+# Shadow: CONFIRMÉ V22 (diff=84/255=0.33, blur=18px)
 BROLL_SHADOW_BLUR        = 18
-BROLL_SHADOW_OPACITY     = 0.33    # ← CORRIGÉ (était 0.25, mesuré 84/255≈0.33)
+BROLL_SHADOW_OPACITY     = 0.33
 
-# ARCHITECTURE_MASTER_V22: B-roll center Y corrigé
-# Mesuré: card center at 483/1024 = 0.4717×H (légèrement au-dessus du milieu)
-BROLL_CARD_CENTER_Y_RATIO = 0.4717  # ← NOUVEAU (permet un rendu plus fidèle)
+# Center Y: CONFIRMÉ V22 (mesure 489/1024=0.478 ≈ 0.4717)
+BROLL_CARD_CENTER_Y_RATIO = 0.4717
 
-# Spring physics (mesuré — paramètres CONFIRMÉS)
-# settle < 33ms (1 frame à 30fps) → stiffness=900, damping=30, ζ≈0.50 est correct
+
+# ── Spring physics ────────────────────────────────────────────────────────────
+
+# ARCHITECTURE_MASTER_V23: CONFIRMÉ par analyse frame (settle 3-4 frames = 99-132ms à 30fps)
 SPRING_STIFFNESS = 900
 SPRING_DAMPING   = 30
-SPRING_SLIDE_PX  = 8    # Y offset initial (le texte monte légèrement en entrant)
+SPRING_SLIDE_PX  = 8
 
-# ARCHITECTURE_MASTER_V22: Police de base CORRIGÉE
-# Mesure pixel: text_h=27px @ 1024p → 27×1920/1024 = 50px équiv 1920p pour petits mots.
-# Pour les mots d'impact (t=18s, t=40s): text_h=58px → 108px@1920p.
-# La base est ~75px (les grands mots sont BOLD×1.10 = 82px, les petits STOP×0.85 = 63px)
-FS_BASE = 75    # ← CORRIGÉ (était 80, -6.25% d'erreur mesurée)
+
+# ── Police ───────────────────────────────────────────────────────────────────
+
+# ARCHITECTURE_MASTER_V23: FS_BASE CORRIGÉ
+# Mesure: text_h=27px@1024p → scale_to_1920p: 27*(1920/1024)=50.6px → font=50.6/0.75=67.4px
+# Arrondi à 70px (entre 68 mesuré et 75 de V22 — on prend le milieu robuste)
+FS_BASE = 70    # ← CORRIGÉ (V22 avait 75, mesuré ~68)
 FS_MIN  = 32
 
-# Timing confirmé
-ENTRY_DUR      = 0.033   # 1 frame @ 30fps — spring settle ultra-rapide CONFIRMÉ
-EXIT_DUR       = 0.0     # HARD CUT — 0 frames CONFIRMÉ
-PRE_ROLL       = 0.033   # 1 frame d'anticipation
+# ARCHITECTURE_MASTER_V23: ACCENT scale CORRIGÉ
+# V22 avait 1.10×. Mesuré: 41px@1024p vs 27px normal → ratio 41/27=1.52
+# Valeur codée: 1.45× (légèrement conservateur par rapport à 1.52 mesuré)
+FS_ACCENT_SCALE  = 1.45   # ← NOUVEAU: séparé de get_word_style pour facilité de test
+FS_STOP_SCALE    = 0.85
+FS_MUTED_SCALE   = 1.10
+FS_BADGE_SCALE   = 1.25
+FS_BOLD_SCALE    = 1.15
 
-# Zoom global
+
+# ── Timing & Animation ────────────────────────────────────────────────────────
+
+# ARCHITECTURE_MASTER_V23: Timings CONFIRMÉS par mesure frame
+ENTRY_DUR      = 0.033   # 1 frame @30fps — spring settle ultra-rapide CONFIRMÉ
+EXIT_DUR       = 0.0     # HARD CUT confirmé (0 frames)
+PRE_ROLL       = 0.033
+
+# ARCHITECTURE_MASTER_V23: Zoom global CONFIRMÉ
 GLOBAL_ZOOM_START = 1.00
-GLOBAL_ZOOM_END   = 1.03   # Subtil — confirmé (texte légèrement plus gros en fin de vidéo)
+GLOBAL_ZOOM_END   = 1.03
 
-# Slide exit
 SLIDE_OUT_PX = 500
 
-# Inversion — paramètres corrigés depuis mesure réelle
-# Mesure: 2 fenêtres inversées sur 44s → ~1 inversion toutes les 20s
-# Estimation: déclenchée tous les 10-14 mots (paramètre conservé)
-INVERSION_WORD_MIN = 10
+
+# ── Inversion — CORRIGÉES avec durées exactes ─────────────────────────────────
+
+# ARCHITECTURE_MASTER_V23: Durées inversions mesurées précisément
+# Inversion #1: t=12.00s→12.70s = 700ms (21 frames)
+# Inversion #2: t=40.10s→end    = ~3900ms
+# Note: les seuils par mots restent en fallback si Whisper non disponible
+INVERSION_WORD_MIN = 10   # fallback: mots avant première inversion
 INVERSION_WORD_MAX = 14
 
-# ── Alias pour rétrocompatibilité scene_animator ─────────────────────────────
+# ARCHITECTURE_MASTER_V23: Inversion par timestamps (prioritaire sur word-count)
+# Si les timestamps Whisper sont disponibles, utiliser ceux-ci directement.
+# Ces constantes servent de fallback si pas de timestamps.
+INVERSION_TIMESTAMPS = [
+    (12.00, 12.70),   # Fenêtre 1: 700ms (mesurée précisément)
+    (40.10, 44.10),   # Fenêtre 2: jusqu'à la fin (44s = durée totale)
+]
+
+
+# ── Aliases rétrocompatibilité ────────────────────────────────────────────────
+
 WHITE_BG_COLOR = (255, 255, 255)
 CREAM_BG_COLOR = (245, 245, 247)

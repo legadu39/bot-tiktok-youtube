@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V22: Moteur de classification et de style du texte.
+# ARCHITECTURE_MASTER_V23: Moteur de classification et de style du texte — CORRIGÉ.
 #
-# PARADIGME CLÉ (rupture avec V9) :
-#   V9 : groupe les mots en "phrases" (3-5 mots)
-#   V22 : UN MOT PAR FRAME — c'est ce que la référence utilise systématiquement.
-#
-# MESURES RÉFÉRENCE :
-#   - Chaque word dure exactement sa durée audio (pas de padding artificiel)
-#   - Stop words  : gris rgb(160,160,160), poids "regular"
-#   - Mots normaux: quasi-noir rgb(17,17,17), poids "semibold"
-#   - Mots ACCENT : gradient violet→mauve, poids "bold"
-#   - Mots MUTED  : rouge rgb(230,45,35), poids "bold"
-#   - Chiffres    : vert rgb(0,208,132), poids "bold", taille +20%
+# DELTA V23 vs V22:
+#   1. get_word_style() utilise FS_ACCENT_SCALE=1.45 (mesuré 1.52, codé 1.45)
+#      V22 avait 1.10× — NETTEMENT sous-évalué selon les mesures.
+#   2. TEXT_DIM_RGB corrigé: 150,150,150 (V22 avait 103,103,103 trop sombre)
+#   3. STOP_WORDS enrichi (plus fréquents = meilleure classification)
+#   4. Nouveau: classify_word() détecte maintenant les BADGE par patterns regex
+#      plus robustes (e.g. "500$" sans espace, "1000€")
 
 from __future__ import annotations
 import re
@@ -20,6 +16,8 @@ from typing import List, Tuple
 from .config import (
     TEXT_RGB, TEXT_DIM_RGB, ACCENT_RGB, MUTED_RGB,
     STOP_WORDS, KEYWORDS_ACCENT, KEYWORDS_MUTED, IMPACT_WORDS, RE_NUMERIC,
+    FS_BASE, FS_MIN,
+    FS_ACCENT_SCALE, FS_STOP_SCALE, FS_MUTED_SCALE, FS_BADGE_SCALE, FS_BOLD_SCALE,
 )
 
 
@@ -28,42 +26,53 @@ from .config import (
 # ══════════════════════════════════════════════════════════════════════════════
 
 class WordClass:
-    STOP   = "STOP"     # Stop word → gris, regular
-    NORMAL = "NORMAL"   # Mot standard → quasi-noir, semibold
-    ACCENT = "ACCENT"   # Mot positif → gradient violet, bold
-    MUTED  = "MUTED"    # Mot négatif → rouge, bold
-    BADGE  = "BADGE"    # Chiffre/valeur → vert, bold, taille+
-    PAUSE  = "PAUSE"    # Silence audio → aucun rendu
+    STOP   = "STOP"     # Stop word → gris clair (150,150,150), regular
+    NORMAL = "NORMAL"   # Standard  → quasi-noir (25,25,25), semibold
+    ACCENT = "ACCENT"   # Positif   → gradient rose-chaud, bold, +45%
+    MUTED  = "MUTED"    # Négatif   → rouge (220,40,35), bold, +10%
+    BADGE  = "BADGE"    # Chiffre   → vert (0,208,132), bold, +25%
+    PAUSE  = "PAUSE"    # Silence   → aucun rendu
 
+
+# ARCHITECTURE_MASTER_V23: Regex BADGE élargi (gère "1000€", "50k", "179$", etc.)
+RE_BADGE = re.compile(r'[\d\$€£%]|^\d+[kKmM]?$|^\d+[\.,]\d+$', re.IGNORECASE)
 
 def classify_word(text: str) -> str:
     """
-    ARCHITECTURE_MASTER_V22 : Classification sémantique d'un mot.
+    ARCHITECTURE_MASTER_V23: Classification sémantique mot.
 
-    Priorité de détection :
-        1. PAUSE   (marqueur explicite)
-        2. BADGE   (chiffres, symboles monétaires)
-        3. ACCENT  (mots positifs de la liste)
-        4. MUTED   (mots négatifs de la liste)
+    Priorité:
+        1. PAUSE   (marqueur explicite ou "…")
+        2. BADGE   (chiffres, devises, pourcentages)
+        3. MUTED   (mots négatifs — prioritaire sur ACCENT)
+        4. ACCENT  (mots positifs + impact words)
         5. STOP    (articles, prépositions, etc.)
         6. NORMAL  (tout le reste)
     """
-    clean = text.strip().lower().rstrip(".,!?:;'\"")
+    if not text:
+        return WordClass.NORMAL
 
-    if "[PAUSE]" in text.upper() or text.strip() in ("…", "..."):
+    raw = text.strip()
+    clean = re.sub(r'\[.*?\]', '', raw).strip().lower().rstrip(".,!?:;'\"«»")
+
+    # ── 1. PAUSE ─────────────────────────────────────────────────────────────
+    if "[PAUSE]" in raw.upper() or raw in ("…", "...", "—"):
         return WordClass.PAUSE
 
-    if RE_NUMERIC.search(text):
+    # ── 2. BADGE (chiffres, devises) ─────────────────────────────────────────
+    # ARCHITECTURE_MASTER_V23: utilise regex élargi vs simple RE_NUMERIC
+    if RE_BADGE.search(raw):
         return WordClass.BADGE
 
-    # ARCHITECTURE_MASTER_V22 : MUTED prioritaire sur ACCENT (un mot négatif
-    # comme "crash" ne peut pas être classé positif même s'il est dans IMPACT_WORDS)
+    # ── 3. MUTED (négatif — prioritaire sur ACCENT) ──────────────────────────
     if clean in KEYWORDS_MUTED:
         return WordClass.MUTED
 
+    # ── 4. ACCENT (positif + impact) ─────────────────────────────────────────
     if clean in KEYWORDS_ACCENT or clean in IMPACT_WORDS:
         return WordClass.ACCENT
 
+    # ── 5. STOP ──────────────────────────────────────────────────────────────
     if clean in STOP_WORDS:
         return WordClass.STOP
 
@@ -72,69 +81,79 @@ def classify_word(text: str) -> str:
 
 def get_word_style(word_class: str, base_size: int) -> Tuple[int, str, tuple, bool]:
     """
-    ARCHITECTURE_MASTER_V22 : Retourne (fontsize, weight, color, use_gradient).
+    ARCHITECTURE_MASTER_V23: Retourne (fontsize, weight, color, use_gradient).
 
-    use_gradient=True  → appeler render_text_gradient() au lieu de render_text_solid()
-
-    Calibration depuis la référence :
-        STOP   : size × 0.85, regular,  rgb(160,160,160), no gradient
-        NORMAL : size × 1.00, semibold, rgb(17,17,17),    no gradient
-        ACCENT : size × 1.10, bold,     gradient,          YES gradient
-        MUTED  : size × 1.10, bold,     rgb(230,45,35),   no gradient
-        BADGE  : size × 1.25, bold,     rgb(0,208,132),   no gradient
+    Calibration CORRIGÉE depuis mesures référence:
+    ┌────────────────────┬──────────────┬──────────────┬──────────────────────┐
+    │ Classe             │ Scale V22    │ Scale V23    │ Source               │
+    ├────────────────────┼──────────────┼──────────────┼──────────────────────┤
+    │ STOP               │ ×0.85        │ ×0.85        │ (confirmé)           │
+    │ NORMAL             │ ×1.00        │ ×1.00        │ (confirmé)           │
+    │ ACCENT             │ ×1.10        │ ×1.45        │ mesuré 41/27=1.52    │
+    │ MUTED              │ ×1.10        │ ×1.10        │ (pas de mesure diff) │
+    │ BADGE              │ ×1.25        │ ×1.25        │ (confirmé)           │
+    └────────────────────┴──────────────┴──────────────┴──────────────────────┘
     """
     if word_class == WordClass.STOP:
-        return (max(20, int(base_size * 0.85)), "regular",  TEXT_DIM_RGB,       False)
+        return (max(FS_MIN, int(base_size * FS_STOP_SCALE)), "regular",  TEXT_DIM_RGB, False)
     if word_class == WordClass.NORMAL:
-        return (max(20, int(base_size * 1.00)), "semibold", TEXT_RGB,            False)
+        return (max(FS_MIN, int(base_size * 1.00)),          "semibold", TEXT_RGB,     False)
     if word_class == WordClass.ACCENT:
-        return (max(20, int(base_size * 1.10)), "bold",     TEXT_RGB,            True)
+        # ARCHITECTURE_MASTER_V23: scale 1.45 (CORRIGÉ depuis 1.10)
+        return (max(FS_MIN, int(base_size * FS_ACCENT_SCALE)), "bold",   TEXT_RGB,     True)
     if word_class == WordClass.MUTED:
-        return (max(20, int(base_size * 1.10)), "bold",     MUTED_RGB,           False)
+        return (max(FS_MIN, int(base_size * FS_MUTED_SCALE)), "bold",    MUTED_RGB,    False)
     if word_class == WordClass.BADGE:
-        return (max(20, int(base_size * 1.25)), "bold",     ACCENT_RGB,          False)
-    # NORMAL par défaut
+        return (max(FS_MIN, int(base_size * FS_BADGE_SCALE)), "bold",    ACCENT_RGB,   False)
     return (base_size, "semibold", TEXT_RGB, False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 2 — Groupement Temporel (1 mot = 1 groupe dans la référence)
+# BLOC 2 — Groupement Temporel (1 mot = 1 entrée)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def split_to_single_words(
     timeline: List[Tuple[float, float, str]],
 ) -> List[Tuple[float, float, str]]:
     """
-    ARCHITECTURE_MASTER_V22 : Découpage mot-à-mot.
+    ARCHITECTURE_MASTER_V23: Découpage mot-à-mot.
 
-    La référence montre systématiquement UN mot à la fois.
-    Si whisper donne des chunks multi-mots, on les redécoupe
-    en proportionnant la durée sur le nombre de caractères.
+    La référence montre UN mot à la fois, timing exactement calqué sur Whisper.
+    Si un chunk multi-mots arrive, on le redécoupe en proportionnant sur chars.
 
-    Input  : [(t_start, t_end, "deux mots"), ...]
-    Output : [(t_start, t_mid, "deux"), (t_mid, t_end, "mots"), ...]
+    ARCHITECTURE_MASTER_V23: AMÉLIORATION — détection des marqueurs inline:
+    [BOLD], [LIGHT], [BADGE], [PAUSE] sont préservés avec le mot adjacent.
     """
     result = []
     for t_start, t_end, text in timeline:
         clean = text.strip()
-        if not clean or "[PAUSE]" in clean.upper():
+        if not clean:
+            continue
+
+        # Marqueur PAUSE explicite
+        if "[PAUSE]" in clean.upper() or clean in ("…", "..."):
             result.append((t_start, t_end, "[PAUSE]"))
             continue
 
-        words    = clean.split()
-        duration = t_end - t_start
+        # Extraire les mots (en conservant les marqueurs)
+        words = clean.split()
         if not words:
             continue
+
+        duration = t_end - t_start
 
         if len(words) == 1:
             result.append((t_start, t_end, words[0]))
             continue
 
-        # Durée proportionnelle au nombre de caractères
-        total_chars = sum(len(w) for w in words)
+        # Durée proportionnelle aux caractères (hors marqueurs)
+        def char_count(w: str) -> int:
+            return max(1, len(re.sub(r'\[.*?\]', '', w)))
+
+        total_chars = sum(char_count(w) for w in words)
         t = t_start
         for i, w in enumerate(words):
-            ratio  = len(w) / max(total_chars, 1)
+            ratio  = char_count(w) / max(total_chars, 1)
             t_next = t_end if i == len(words) - 1 else t + duration * ratio
             result.append((t, t_next, w))
             t = t_next
@@ -148,9 +167,7 @@ def group_into_phrases(
     max_per_group:  int = 5,
 ) -> List[List[Tuple[float, float, str]]]:
     """
-    ARCHITECTURE_MASTER_V22 : Mode phrase (héritage V9).
-    Conservé pour rétrocompatibilité mais NON utilisé dans le burner principal.
-    La référence utilise split_to_single_words().
+    Mode phrase (rétrocompatibilité V9). NON utilisé dans le pipeline principal V23.
     """
     groups:  List[List] = []
     current: List       = []
