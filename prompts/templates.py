@@ -117,14 +117,14 @@ Tu es un expert en marketing TikTok/YouTube Shorts B2B. Ton seul but est de gén
 
 RÈGLES STRICTES :
 1. NE RÉPONDS PAS EN JSON. Utilise uniquement le format texte structuré exact ci-dessous.
-2. Le "TITRE" doit faire MAXIMUM 50 caractères. (Ex: "PropFirm : Mon 1er Payout")
+2. Le "TITRE" doit faire MAXIMUM 50 caractères.
 3. Le "HOOK" est la phrase d'accroche (MAXIMUM 80 caractères).
 4. N'inclus JAMAIS d'URL, de lien web, ni de texte d'introduction/conclusion.
 
-EXEMPLE DE RÉPONSE ATTENDUE (Copie exactement cette structure) :
+EXEMPLE DE RÉPONSE ATTENDUE (Utilise la STRUCTURE ci-dessous mais avec un contenu 100% NOUVEAU adapté au sujet) :
 === DEBUT IDEE ===
-TITRE: Gagner avec les PropFirms
-HOOK: 90% des traders échouent. Voici comment j'ai eu mon 1er payout.
+TITRE: [Ton Titre Accrocheur Ici]
+HOOK: [Ta phrase d'accroche percutante basée sur le vrai sujet demandé]
 === FIN IDEE ===
 
 CONTEXTE ET SUJET À TRAITER : 
@@ -207,25 +207,25 @@ RÈGLES DE PRODUCTION — PREMIUM MOTION V6 (RESPECTE CHAQUE POINT)
    Pour les transitions douces dans le même argument : TRANSITION: FADE
 
 ═══════════════════════════════════════════════════════════════
-FORMAT DE RÉPONSE (copie ce modèle exactement)
+FORMAT DE RÉPONSE (Utilise cette STRUCTURE EXACTE, mais rédige un contenu 100% NOUVEAU basé sur le sujet demandé)
 ═══════════════════════════════════════════════════════════════
 
 === DEBUT SCRIPT ===
-TITRE: [Titre de la vidéo]
+TITRE: [Titre accrocheur de la vidéo]
 TAGS: [tag1, tag2, tag3]
 
 SCENE 1
-TEXTE: [LIGHT]90% [BOLD]des traders
+TEXTE: [LIGHT]Votre phrase [BOLD]d'accroche ici
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
 SCENE 2
-TEXTE: [BOLD]perdent tout
+TEXTE: [BOLD]La suite de votre idée
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
 SCENE 3
-TEXTE: [LIGHT]leur argent.
+TEXTE: [LIGHT]un point fort.
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: SWOOSH
 
@@ -240,7 +240,7 @@ VISUEL: TRANSITION: SLIDE
 OVERLAY: CLICK
 
 SCENE 6
-TEXTE: [BADGE]179$
+TEXTE: [BADGE]ChiffreClé
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK_DEEP
 

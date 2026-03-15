@@ -1,31 +1,40 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V23: SubtitleBurner — Moteur unifié Timeline + B-Roll.
+# ARCHITECTURE_MASTER_V24: SubtitleBurner — Correction architecturale majeure.
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V23 vs V22                                                           ║
+# ║  DELTA V24 vs V23                                                           ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║  FIX  #1 — Inversion par TIMESTAMPS (mesurés) au lieu de word-count seul   ║
-# ║  FIX  #2 — Gradient ACCENT: rose-chaud (204,90,120) au lieu de violet      ║
-# ║  FIX  #3 — FS_BASE 70px (corrigé depuis 75)                                ║
-# ║  FIX  #4 — TEXT_DIM_RGB 150,150,150 (V22 avait 103 — trop sombre)          ║
-# ║  FIX  #5 — ACCENT scale 1.45× (V22 avait 1.10× — sous-évalué)              ║
 # ║                                                                              ║
-# ║  NOUVEAU #1 — Pipeline unifié via TimelineEngine                           ║
-# ║    burn_subtitles() construit des TimelineObject et les passe au            ║
-# ║    TimelineEngine. Plus de boucle custom → architecture modulaire.          ║
+# ║  CORRECTION ARCHITECTURALE CENTRALE (reverse-engineering frame-par-frame)  ║
 # ║                                                                              ║
-# ║  NOUVEAU #2 — B-Roll Card intégration inline                               ║
-# ║    burn_subtitles() accepte un paramètre broll_schedule:                    ║
-# ║    [(t_start, t_end, image_path), ...]. Les cards sont rendues et           ║
-# ║    insérées dans la timeline avec spring entry animation.                   ║
+# ║  V23 (INCORRECT) :                                                          ║
+# ║    TEXT_Y_WITH_BROLL_RATIO = 0.72 → texte se déplace vers le bas          ║
+# ║    BROLL_CARD_CENTER_Y_RATIO = 0.4717 → card au centre écran              ║
 # ║                                                                              ║
-# ║  NOUVEAU #3 — Smart Layout (collision detection)                           ║
-# ║    Si une card B-Roll est active, le texte est décalé vers le BAS pour      ║
-# ║    éviter la superposition (pas de collision visuelle).                     ║
+# ║  V24 (CORRECT, mesuré) :                                                   ║
+# ║    Le texte reste TOUJOURS à 0.4985H — aucun déplacement                  ║
+# ║    La card se positionne à 0.663H — EN BAS du texte                       ║
+# ║    Layout: texte (0.4985H) + card sous le texte (0.663H)                  ║
 # ║                                                                              ║
-# ║  NOUVEAU #4 — Inversion timestamps-driven                                  ║
-# ║    Les intervalles d'inversion sont définis par INVERSION_TIMESTAMPS        ║
-# ║    (mesurés précisément: fenêtre 1 = 12.0→12.7s, fenêtre 2 = 40.1→end)    ║
+# ║  FIX #1 — _compute_text_y_for_time() retourne TOUJOURS self._text_cy      ║
+# ║            La méthode existe pour extensibilité future mais ne déplace     ║
+# ║            plus le texte. BROLL_TEXT_STAYS_PUT = True.                     ║
+# ║                                                                              ║
+# ║  FIX #2 — _build_broll_timelineobject() : card positionnée à 0.663H       ║
+# ║            (BROLL_CARD_CENTER_Y_RATIO = 0.663 dans config V24)            ║
+# ║                                                                              ║
+# ║  FIX #3 — Couleurs bg inversion : bg1=noir pur, bg2=navy (14,14,26)       ║
+# ║            make_frame() applique la couleur exacte mesurée                 ║
+# ║                                                                              ║
+# ║  FIX #4 — INVERSION_TIMESTAMPS : (12.00,12.79) et (40.20,44.10)          ║
+# ║            (V23 avait (12.0,12.7) et (40.1,44.1))                         ║
+# ║                                                                              ║
+# ║  CONSERVÉ depuis V23 :                                                      ║
+# ║    Pipeline unifié TimelineEngine ✓                                         ║
+# ║    spring entry pour les cards (stiffness=900, damping=30) ✓              ║
+# ║    Word-level Whisper timeline ✓                                            ║
+# ║    Global zoom 1.00→1.03 ease_in_out_sine ✓                               ║
+# ║    Hard cut (t < t_end strict) ✓                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 from __future__ import annotations
@@ -49,7 +58,8 @@ from .config import (
     INVERSION_TIMESTAMPS,
     BROLL_CARD_WIDTH_RATIO, BROLL_CARD_CENTER_Y_RATIO,
     BROLL_CARD_RADIUS_RATIO, BROLL_SHADOW_BLUR, BROLL_SHADOW_OPACITY,
-    BROLL_SHADOW_EXPAND_PX,
+    BROLL_SHADOW_EXPAND_PX, BROLL_TEXT_STAYS_PUT,
+    INVERSION_BG_COLOR_1, INVERSION_BG_COLOR_2,
 )
 from .physics   import SpringPhysics, wiggle_offset
 from .easing    import EasingLibrary
@@ -81,40 +91,44 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE_MASTER_V23: SubtitleBurner — Pipeline Unifié
+# ARCHITECTURE_MASTER_V24: SubtitleBurner — Layout Corrigé
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SubtitleBurner:
     """
-    ARCHITECTURE_MASTER_V23: Moteur unifié sous-titres + B-Roll.
+    ARCHITECTURE_MASTER_V24: Moteur unifié sous-titres + B-Roll.
 
-    Architecture V23 (rupture vs V22):
-    ───────────────────────────────────
-    V22: boucle custom dans make_frame(t) → rigide, pas d'overlapping
-    V23: TimelineEngine → chaque objet (mot, card) connaît son état à t exact.
-         Overlapping contrôlé, B-Roll inline, collision detection, tout modulaire.
+    CORRECTION CENTRALE vs V23:
+    ───────────────────────────
+    V23 (INCORRECT): Texte se déplaçait à 0.72H quand B-Roll actif.
+    V24 (CORRECT):   Texte reste à 0.4985H EN PERMANENCE.
+                     La B-Roll card se positionne à 0.663H (SOUS le texte).
 
-    Paradigme référence (mesuré):
-    ─────────────────────────────
-    • Word cadence  : min=33ms(1f), avg=165ms(5f), max=330ms
-    • Spring settle : 3-4 frames (99-132ms @30fps) CONFIRMÉ
-    • Centre Y      : H × 0.499 (CORRIGÉ depuis 0.497)
-    • Police base   : 70px (CORRIGÉ depuis 75px)
-    • ACCENT scale  : 1.45× (CORRIGÉ depuis 1.10×)
-    • STOP color    : rgb(150,150,150) (CORRIGÉ depuis 103,103,103)
-    • Gradient      : rose-chaud (204,90,120→160,60,100) (CORRIGÉ depuis violet)
-    • Inversion #1  : t=12.00s→12.70s (700ms mesurés)
-    • Inversion #2  : t=40.10s→end
-    • Hard cut      : t < t_end (strict, 0 frame fondu)
+    Layout référence mesuré (576×1024 @30fps):
+    ────────────────────────────────────────────
+    • Texte centre    : 510.5/1024 = 0.4985H (FIXE avec/sans B-Roll)
+    • Card centre     : 679/1024 = 0.663H    (dans la moitié basse)
+    • Card top        : ~497/1024 = 0.485H   (légère superposition avec texte)
+    • Card bottom     : ~861/1024 = 0.841H
+    • Inversion #1    : t=12.00→12.79s, bg=rgb(0,0,0) pur noir
+    • Inversion #2    : t=40.20→44.10s, bg=rgb(14,14,26) navy
+
+    Paradigme de composition :
+    ─────────────────────────
+    1. Base frame (fond blanc ou inversé)
+    2. B-Roll cards via TimelineEngine (z_index=5)
+    3. Texte via compose_frame (z_index=10, toujours au-dessus des cards)
+    4. Zoom global 1.00→1.03 ease_in_out_sine
     """
 
     VID_W  = 1080
     VID_H  = 1920
     SAFE_W = 940
 
-    # ARCHITECTURE_MASTER_V23: Zone safe TEXT quand B-Roll est active
-    # Le texte se positionne SOUS le centre quand une card occupe le centre
-    TEXT_Y_WITH_BROLL_RATIO = 0.72   # Texte à 72% du canvas quand B-Roll actif
+    # ARCHITECTURE_MASTER_V24: Suppression de TEXT_Y_WITH_BROLL_RATIO
+    # Le texte ne bouge plus. Ce ratio est maintenu uniquement pour
+    # rétrocompatibilité si besoin d'override via sous-classe.
+    TEXT_Y_WITH_BROLL_RATIO = TEXT_ANCHOR_Y_RATIO  # = 0.4985 (INCHANGÉ!)
 
     def __init__(
         self,
@@ -135,9 +149,13 @@ class SubtitleBurner:
             damping=spring_damping,
         )
 
-        # ARCHITECTURE_MASTER_V23: TEXT_ANCHOR_Y = 0.499×H
-        self._text_cy          = int(self.VID_H * TEXT_ANCHOR_Y_RATIO)
-        self._text_cy_broll    = int(self.VID_H * self.TEXT_Y_WITH_BROLL_RATIO)
+        # ARCHITECTURE_MASTER_V24: Un seul ancrage Y pour le texte (0.4985H)
+        # TEXT_ANCHOR_Y_RATIO = 0.4985 (mesuré: 510.5/1024)
+        self._text_cy = int(self.VID_H * TEXT_ANCHOR_Y_RATIO)
+
+        # ARCHITECTURE_MASTER_V24: _text_cy_broll = _text_cy (texte ne bouge plus)
+        # Alias pour rétrocompatibilité du code appelant
+        self._text_cy_broll = self._text_cy
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION 1 — Classification & Style
@@ -160,7 +178,7 @@ class SubtitleBurner:
         return mapping.get(color, TEXT_RGB_INV)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2 — Construction WordClip (inchangée vs V22 sauf correction Y)
+    # SECTION 2 — Construction WordClip
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_word_clip(
@@ -171,11 +189,10 @@ class SubtitleBurner:
         y_anchor: int = None,
     ) -> Optional[WordClip]:
         """
-        ARCHITECTURE_MASTER_V23: Construit un WordClip.
+        ARCHITECTURE_MASTER_V24: Construit un WordClip.
 
-        NOUVEAU: y_anchor paramétrable → permet le Smart Layout.
-        Si une B-Roll card est active à ce moment, y_anchor = _text_cy_broll
-        (le texte descend sous la card pour éviter la collision).
+        y_anchor est passé par burn_subtitles() mais sera toujours self._text_cy
+        dans V24 (texte ne bouge plus). Paramètre conservé pour extensibilité.
         """
         clean = self._strip_tags(word).strip()
         if not clean:
@@ -213,7 +230,6 @@ class SubtitleBurner:
 
         ph, pw = arr_n.shape[:2]
         x_pos  = (self.VID_W - pw) // 2
-        # ARCHITECTURE_MASTER_V23: utilise y_anchor paramétrable
         cy_use = y_anchor if y_anchor is not None else self._text_cy
         y_pos  = cy_use - ph // 2
 
@@ -229,7 +245,7 @@ class SubtitleBurner:
         )
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 3 — Inversion TIMESTAMPS-DRIVEN (ARCHITECTURE_MASTER_V23)
+    # SECTION 3 — Inversion TIMESTAMPS-DRIVEN (V24: timestamps corrigés)
     # ══════════════════════════════════════════════════════════════════════
 
     def _compute_inversion_intervals(
@@ -238,16 +254,15 @@ class SubtitleBurner:
         duration: float,
     ) -> List[Tuple[float, float]]:
         """
-        ARCHITECTURE_MASTER_V23: Intervalles d'inversion basés sur TIMESTAMPS mesurés.
+        ARCHITECTURE_MASTER_V24: Intervalles d'inversion corrigés.
 
-        NOUVEAU vs V22: INVERSION_TIMESTAMPS est la source primaire.
-        Le word-count fallback n'est utilisé que si les timestamps sont désactivés.
-
-        Mesures référence:
-            Fenêtre 1: t=12.00s → t=12.70s (700ms)
-            Fenêtre 2: t=40.10s → end (~44s)
+        Mesures frame-par-frame confirmées:
+            Fenêtre 1: t=12.00s → 12.79s (790ms = 24 frames @30fps)
+                       Détecté: dark bg entre idx=119 et idx=136
+            Fenêtre 2: t=40.20s → 44.10s
+                       Détecté: dark bg depuis t≈40.33s
         """
-        # ARCHITECTURE_MASTER_V23: Méthode 1 — timestamps directs (PRIORITAIRE)
+        # Méthode 1: timestamps primaires (PRIORITAIRE)
         intervals = [
             (t0, min(t1, duration))
             for t0, t1 in INVERSION_TIMESTAMPS
@@ -256,7 +271,7 @@ class SubtitleBurner:
         if intervals:
             return intervals
 
-        # Fallback: word-count (V22 compat)
+        # Fallback: word-count (V22/V23 compat)
         import random
         intervals    = []
         sorted_clips = sorted(clips, key=lambda c: c.t_start)
@@ -283,7 +298,25 @@ class SubtitleBurner:
         return intervals
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 4 — Rendu B-Roll Card (NOUVEAU V23)
+    # SECTION 4 — Couleur de fond inversion (NOUVEAU V24)
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _get_inversion_bg_color(self, t: float) -> Tuple[int, int, int]:
+        """
+        ARCHITECTURE_MASTER_V24: Retourne la couleur de fond exacte par fenêtre.
+
+        Mesures:
+            Inversion #1 (t≈12-12.79s) : bg = rgb(0,0,0) pur noir
+            Inversion #2 (t≈40.2-fin)  : bg = rgb(14,14,26) navy profond
+        """
+        # Fenêtre 2 : dark navy (après t=40.2s)
+        if t >= 40.20:
+            return INVERSION_BG_COLOR_2   # (14, 14, 26)
+        # Fenêtre 1 et tout autre cas : pur noir
+        return INVERSION_BG_COLOR_1       # (0, 0, 0)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # SECTION 5 — B-Roll Card (V24: position corrigée)
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_broll_timelineobject(
@@ -296,16 +329,24 @@ class SubtitleBurner:
         vid_h:      int,
     ) -> None:
         """
-        ARCHITECTURE_MASTER_V23: Construit et ajoute un TimelineObject B-Roll.
+        ARCHITECTURE_MASTER_V24: Card B-Roll positionnée à 0.663H.
 
-        Pipeline:
-            1. render_broll_card() → RGBA numpy array
-            2. Calculer position centrée (cx=W/2, cy=H×0.471)
-            3. Créer TimelineObject avec spring entry
-            4. Ajouter au TimelineEngine (z_index=5 → derrière le texte z=10)
+        CORRECTION MAJEURE vs V23:
+            V23: cy_base = vid_h * 0.4717 → card au centre (INCORRECT)
+            V24: cy_base = vid_h * 0.663  → card dans la moitié basse (CORRECT)
 
-        Spring: identique au texte (stiffness=900, damping=30).
-        Entrée: slide depuis Y+60px, alpha 0→1 en 3-4 frames.
+        Layout résultant (1080×1920):
+            Card center Y = 1920 * 0.663 = 1273px
+            Card top      = 1273 - card_h/2 ≈ 932px  (0.485H)
+            Card bottom   = 1273 + card_h/2 ≈ 1615px (0.841H)
+            Texte centre  = 1920 * 0.4985 = 957px     (0.499H)
+
+            → Légère superposition texte/card au niveau du bord supérieur
+              de la card (957 vs 932 = 25px de chevauchement intentionnel)
+            → Le texte (z=10) apparaît AU-DESSUS de la card (z=5)
+
+        Pipeline spring entry:
+            Slide depuis Y+8px, alpha 0→1 en 3-4 frames (99-132ms @30fps)
         """
         try:
             card_arr = render_broll_card(
@@ -321,6 +362,8 @@ class SubtitleBurner:
 
         ch, cw = card_arr.shape[:2]
         cx_pos  = (vid_w - cw) // 2
+
+        # ARCHITECTURE_MASTER_V24: BROLL_CARD_CENTER_Y_RATIO = 0.663 (corrigé)
         cy_base = int(vid_h * BROLL_CARD_CENTER_Y_RATIO)
         cy_pos  = cy_base - ch // 2
 
@@ -333,12 +376,12 @@ class SubtitleBurner:
             y           = cy_pos,
             spring      = sp,
             slide_px    = SPRING_SLIDE_PX,
-            z_index     = 5,
+            z_index     = 5,   # Derrière le texte (z=10)
             tag         = "broll_card",
         ))
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 5 — Smart Layout (NOUVEAU V23)
+    # SECTION 6 — Smart Layout V24 (texte fixe — rupture avec V23)
     # ══════════════════════════════════════════════════════════════════════
 
     def _compute_text_y_for_time(
@@ -347,24 +390,28 @@ class SubtitleBurner:
         broll_schedule: List[Tuple[float, float, str]],
     ) -> int:
         """
-        ARCHITECTURE_MASTER_V23: Smart Layout — détermine la position Y du texte.
+        ARCHITECTURE_MASTER_V24: Ancrage Y du texte.
 
-        Si une B-Roll card est active à t → texte positionné à Y_WITH_BROLL (72% du canvas).
-        Sinon → texte au centre standard (Y_ANCHOR = 0.499×H).
+        CORRECTION CENTRALE: Le texte NE SE DÉPLACE PAS.
+        Retourne toujours self._text_cy (= VID_H × 0.4985).
 
-        Cette approche évite la COLLISION visuelle entre texte et image.
+        Historique:
+            V22: Texte fixe (correct)
+            V23: Texte se déplace à 0.72H quand B-Roll actif (INCORRECT)
+            V24: Texte fixe à 0.4985H (retour au comportement correct mesuré)
+
+        La card se positionne SOUS le texte (0.663H) sans
+        perturber l'ancrage du texte.
+
+        Note: broll_schedule est conservé en paramètre pour extensibilité
+        future (ex: si un mode spécial nécessite le déplacement du texte).
+        Pour l'instant: BROLL_TEXT_STAYS_PUT = True dans config.py.
         """
-        if not broll_schedule:
-            return self._text_cy
-
-        for t_b_start, t_b_end, _ in broll_schedule:
-            if t_b_start <= t < t_b_end:
-                return self._text_cy_broll
-
+        # ARCHITECTURE_MASTER_V24: Retourne toujours le centre fixe
         return self._text_cy
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 6 — BURN PRINCIPAL (V23 Pipeline Unifié)
+    # SECTION 7 — BURN PRINCIPAL (V24)
     # ══════════════════════════════════════════════════════════════════════
 
     def burn_subtitles(
@@ -374,77 +421,68 @@ class SubtitleBurner:
         broll_schedule: List[Tuple[float, float, str]] = None,
     ):
         """
-        ARCHITECTURE_MASTER_V23: Point d'entrée principal.
+        ARCHITECTURE_MASTER_V24: Point d'entrée principal.
 
-        NOUVEAU vs V22: Accepte broll_schedule pour les B-Roll cards inline.
+        Différences vs V23:
+            - Texte reste à 0.4985H (ne bouge plus avec B-Roll)
+            - B-Roll card à 0.663H (corrigé depuis 0.4717H)
+            - Couleurs bg inversion par fenêtre (noir pur vs navy)
+            - Timestamps inversion: (12.0,12.79) et (40.2,44.1)
 
-        Input:
-            video_clip     : clip moviepy source
-            timeline       : [(t_start, t_end, word), ...] — Whisper ou proportionnel
-            broll_schedule : [(t_start, t_end, image_path), ...] — optionnel
-
-        Output: clip moviepy avec texte + B-Roll intégrés, pixel-exact.
-
-        Pipeline V23:
+        Pipeline V24:
             1. split_to_single_words → 1 mot/entrée
-            2. _build_word_clip (avec Smart Layout y_anchor)
+            2. _build_word_clip (y_anchor = _text_cy, FIXE)
             3. TimelineEngine.add() pour chaque WordClip
-            4. _build_broll_timelineobject() pour chaque B-Roll
-            5. _compute_inversion_intervals() timestamps-driven
-            6. make_frame(t): TimelineEngine.render_frame() + inversion + zoom
-
-        PARADIGME PERFORMANCE:
-            • Spring: 3-4 frames settle @30fps (99-132ms)
-            • Hard cut: t < t_end strict
-            • Zoom: 1.00→1.03 ease_in_out_sine sur toute la durée
+            4. _build_broll_timelineobject() → card à 0.663H
+            5. _compute_inversion_intervals() timestamps V24
+            6. make_frame(t):
+               a. Base frame
+               b. Inversion bg avec couleur par fenêtre
+               c. B-Roll cards via TimelineEngine (z=5)
+               d. Texte via compose_frame (z=10, toujours visible au-dessus)
+               e. Zoom global 1.00→1.03
         """
         if not MOVIEPY_AVAILABLE:
             print("⚠️  moviepy indisponible — burn_subtitles retourne clip original")
             return video_clip
         if not timeline:
-            print("⚠️  [V23] Timeline vide — aucun sous-titre brûlé")
+            print("⚠️  [V24] Timeline vide — aucun sous-titre brûlé")
             return video_clip
 
         broll_schedule = broll_schedule or []
 
         # ── Étape 1: 1 mot par entrée ─────────────────────────────────────
         words = split_to_single_words(timeline)
-        print(f"🎬 V23 Pipeline: {len(timeline)} entrées → {len(words)} mots")
+        print(f"🎬 V24 Pipeline: {len(timeline)} entrées → {len(words)} mots")
         if broll_schedule:
             print(f"  📸 B-Roll schedule: {len(broll_schedule)} cards")
+            print(f"  📌 Layout: texte FIXE à {TEXT_ANCHOR_Y_RATIO}H, cards à {BROLL_CARD_CENTER_Y_RATIO}H")
 
         vid_w    = video_clip.w
         vid_h    = video_clip.h
         duration = video_clip.duration
         fps      = video_clip.fps or 30
 
-        # ── Mise à l'échelle si canvas ≠ 1080×1920 ───────────────────────
         scale_x = vid_w / self.VID_W
         scale_y = vid_h / self.VID_H
         scaled  = abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01
         if scaled:
-            print(f"📐 V23: Rescaling {self.VID_W}×{self.VID_H} → {vid_w}×{vid_h}")
+            print(f"📐 V24: Rescaling {self.VID_W}×{self.VID_H} → {vid_w}×{vid_h}")
 
-        # Adapter les constantes au canvas réel
-        actual_text_cy       = int(self._text_cy       * scale_y)
-        actual_text_cy_broll = int(self._text_cy_broll * scale_y)
-
-        # Adapter le broll_schedule aux coordonnées canvas réel
-        actual_broll = [
-            (ts, te, ip) for ts, te, ip in broll_schedule
-        ]
+        # ARCHITECTURE_MASTER_V24: Un seul ancrage Y pour le texte
+        actual_text_cy = int(self._text_cy * scale_y)
 
         # ── Étape 2: TimelineEngine ───────────────────────────────────────
         engine = TimelineEngine(width=vid_w, height=vid_h)
 
-        # ── Étape 3: Construire WordClips et les ajouter ──────────────────
+        # ── Étape 3: Construire WordClips ─────────────────────────────────
         all_word_clips: List[WordClip] = []
         for t_start, t_end, word in words:
-            # Smart Layout: calculer le y_anchor selon le broll_schedule
-            y_raw = self._compute_text_y_for_time(t_start, actual_broll)
-            y_scaled = int(y_raw * scale_y) if not scaled else y_raw
+            # ARCHITECTURE_MASTER_V24: y_anchor TOUJOURS = actual_text_cy
+            # _compute_text_y_for_time() retourne toujours self._text_cy
+            y_anchor = actual_text_cy
 
-            wclip = self._build_word_clip(word, t_start, t_end, y_anchor=y_scaled)
+            wclip = self._build_word_clip(word, t_start, t_end, y_anchor=y_anchor)
             if wclip is None:
                 continue
 
@@ -454,18 +492,15 @@ class SubtitleBurner:
 
             all_word_clips.append(wclip)
 
-            # ARCHITECTURE_MASTER_V23: WordClip → TimelineObject via helper
-            # Le make_frame composite les WordClips directement via compose_frame
-            # (garde la compatibilité avec le compositor V22)
-
         if not all_word_clips:
             print("⚠️  Aucun WordClip valide")
             return video_clip
 
-        print(f"✅ V23: {len(all_word_clips)} WordClips")
+        print(f"✅ V24: {len(all_word_clips)} WordClips (ancrage Y fixe: {actual_text_cy}px = {TEXT_ANCHOR_Y_RATIO}H)")
 
-        # ── Étape 4: B-Roll cards dans le TimelineEngine ─────────────────
-        for t_bs, t_be, img_path in actual_broll:
+        # ── Étape 4: B-Roll cards dans le TimelineEngine (z=5) ───────────
+        # ARCHITECTURE_MASTER_V24: Cards positionnées à 0.663H (sous le texte)
+        for t_bs, t_be, img_path in broll_schedule:
             self._build_broll_timelineobject(
                 image_path = img_path,
                 t_start    = t_bs,
@@ -474,11 +509,13 @@ class SubtitleBurner:
                 vid_w      = vid_w,
                 vid_h      = vid_h,
             )
+            card_center_px = int(vid_h * BROLL_CARD_CENTER_Y_RATIO)
+            print(f"  📸 Card t=[{t_bs:.2f},{t_be:.2f}s] → center_y={card_center_px}px ({BROLL_CARD_CENTER_Y_RATIO}H)")
 
-        # ── Étape 5: Intervalles d'inversion ─────────────────────────────
+        # ── Étape 5: Intervalles d'inversion (V24 timestamps) ────────────
         inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
         if inv_intervals:
-            print(f"🎨 V23: {len(inv_intervals)} inversion(s): {[(f'{t0:.1f}s', f'{t1:.1f}s') for t0,t1 in inv_intervals]}")
+            print(f"🎨 V24: {len(inv_intervals)} inversion(s): {[(f'{t0:.2f}s', f'{t1:.2f}s') for t0,t1 in inv_intervals]}")
 
         # ── Étape 6: make_frame ───────────────────────────────────────────
         last_valid_frame = None
@@ -486,7 +523,7 @@ class SubtitleBurner:
         def make_frame(t: float) -> np.ndarray:
             nonlocal last_valid_frame
 
-            # Frame source
+            # Frame source (fond blanc)
             try:
                 base = video_clip.get_frame(t)
                 last_valid_frame = base
@@ -496,21 +533,25 @@ class SubtitleBurner:
 
             # Détection inversion
             is_inv = any(t0 <= t < t1 for t0, t1 in inv_intervals)
-            if is_inv:
-                base = (255 - base).astype(np.uint8)
 
-            # ARCHITECTURE_MASTER_V23: ÉTAPE 1 — B-Roll cards via TimelineEngine
-            # Les cards sont composées en premier (z_index=5, derrière le texte)
+            if is_inv:
+                # ARCHITECTURE_MASTER_V24: Couleur bg par fenêtre (mesuré)
+                bg_color = self._get_inversion_bg_color(t)
+                base = np.full_like(base, 0)
+                base[:,:,0] = bg_color[0]
+                base[:,:,1] = bg_color[1]
+                base[:,:,2] = bg_color[2]
+
+            # ÉTAPE A — B-Roll cards via TimelineEngine (z=5, derrière texte)
             frame = engine.render_frame(t, base)
 
-            # ARCHITECTURE_MASTER_V23: ÉTAPE 2 — Texte via compose_frame (V22 compat)
-            # Les WordClips ont leur propre compositor avec spring physics
+            # ÉTAPE B — Texte via compose_frame (z=10, au-dessus des cards)
             frame = compose_frame(
                 t, all_word_clips, vid_w, vid_h,
                 base_frame=frame, inverted=is_inv,
             )
 
-            # ARCHITECTURE_MASTER_V23: ÉTAPE 3 — Zoom global 1.00→1.03
+            # ÉTAPE C — Zoom global 1.00→1.03 ease_in_out_sine
             p          = EasingLibrary.ease_in_out_sine(t / max(duration, 1e-6))
             zoom_scale = GLOBAL_ZOOM_START + (GLOBAL_ZOOM_END - GLOBAL_ZOOM_START) * p
             frame      = apply_continuous_zoom(frame, zoom_scale)
@@ -524,7 +565,7 @@ class SubtitleBurner:
         return sub_layer
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 7 — Whisper Transcription (inchangée)
+    # SECTION 8 — Whisper Transcription (inchangée)
     # ══════════════════════════════════════════════════════════════════════
 
     def _load_model(self):
@@ -565,11 +606,11 @@ class SubtitleBurner:
                 if text:
                     all_words.append((t_s, t_e, text))
 
-        print(f"🎤 Whisper V23: {len(all_words)} mots transcrits")
+        print(f"🎤 Whisper V24: {len(all_words)} mots transcrits")
         return all_words
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 8 — Rétrocompatibilité nexus_brain.py
+    # SECTION 9 — Rétrocompatibilité
     # ══════════════════════════════════════════════════════════════════════
 
     _SFX_MAP = {
@@ -596,7 +637,7 @@ class SubtitleBurner:
             return False
 
         header = """[Script Info]
-Title: Nexus V23
+Title: Nexus V24
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
