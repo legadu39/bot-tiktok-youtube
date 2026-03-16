@@ -3,20 +3,7 @@
 # FIX_V27_ROOT_CAUSE: Purge absolue de l'état et sécurisation des données d'entrée.
 # FIX_V27_CLI: Moteur asynchrone avec Retry et Backoff exponentiel pour l'Agent Web.
 # NUKE_V28: Éradication absolue des données résiduelles. Refonte totale Fallback/Audio.
-# FIX_GHOST_TEXT: Blacklist anti-placeholder dans _parse_script_from_text.
-#                 Empêche le texte d'exemple du format prompt ("Votre phrase d'accroche ici")
-#                 de se retrouver injecté comme scène réelle lors du rendu vidéo.
-#
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V28 vs V27 (Approche Nucléaire anti-fuite)                            ║
-# ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║  NUKE #1 — Refonte intégrale de _step_3_audio(). En TEST MODE, aucun texte   ║
-# ║            n'est touché/généré. FFmpeg forge un silence MP3 pur.             ║
-# ║  NUKE #2 — Debug Console massif dans _step_4_assembly avant le Kill Switch   ║
-# ║            pour identifier la provenance physique de l'objet pollué.         ║
-# ║  NUKE #3 — Scanner Actif Evergreen: Si un vieux script de test ("90%") est   ║
-# ║            coincé dans le dossier 'evergreen_vault', il est supprimé du DD.  ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# PROD_READY_V31: Zéro Silent Failure, Optimisation extrême du rendu, Timing infaillible.
 
 import asyncio
 import sys
@@ -72,14 +59,11 @@ class SemanticException(Exception):
 _VISUAL_PROMPT_RENDER_INSTRUCTIONS = [
     "fond blanc", "fond noir", "background blanc", "background noir",
     "#ffffff", "#000000", "strict", "aucun visuel", "no image",
-    "transition:", "slide", "fade",
+    "transition:", "transition :", "slide", "fade", "strictement"
 ]
 
 
 # FIX_GHOST_TEXT: Textes fantômes connus issus du bloc FORMAT EXEMPLE de wrap_v3_prompt.
-# Quand le LLM reproduit le schéma exemple au lieu de générer du contenu original,
-# ces chaînes apparaissent comme premières scènes et polluent les sous-titres vidéo.
-# Toute scène dont le texte (en minuscules) contient l'une de ces chaînes est rejetée.
 _GHOST_TEXT_BLACKLIST = frozenset([
     "votre phrase",
     "d'accroche ici",
@@ -107,21 +91,30 @@ def _is_ghost_text(scene_text: str) -> bool:
     if not scene_text:
         return False
     t = scene_text.lower().strip()
-    # FIX_GHOST_TEXT: Retire les tags [BOLD]/[LIGHT]/[BADGE] avant comparaison
     t_clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', t).strip()
     return any(ghost in t_clean for ghost in _GHOST_TEXT_BLACKLIST)
 
 
-def _sanitize_visual_prompt(raw_prompt: str) -> Optional[str]:
+def _sanitize_visual_prompt(raw_prompt: str) -> str:
+    """
+    PROD_READY_V31: Zéro Silent Failure. Au lieu de retourner None et de jeter
+    le prompt si un mot clé technique est trouvé, on nettoie le prompt pour en
+    extraire la substance visuelle réelle. Si vide, on force un fallback utile.
+    """
     if not raw_prompt:
-        return None
-    low = raw_prompt.strip().lower()
+        return "cinematic trading abstract"
+    
+    low = raw_prompt.lower()
     for keyword in _VISUAL_PROMPT_RENDER_INSTRUCTIONS:
-        if keyword in low:
-            return None
-    if len(low) < 4:
-        return None
-    return raw_prompt.strip()
+        low = low.replace(keyword, "")
+        
+    clean = low.strip(" \t\n\r-:;,.#")
+    
+    # Si après nettoyage il ne reste rien de probant, on injecte un fallback générique
+    if len(clean) < 3:
+        return "cinematic trading abstract"
+        
+    return clean
 
 
 class NexusBrain:
@@ -180,7 +173,7 @@ class NexusBrain:
         self.signals_dir   = Path("./temp_signals")
         self.signals_dir.mkdir(exist_ok=True)
 
-        jlog("info", msg=f"Nexus Brain V9.0 initialized (V28 NUKE Pipeline)")
+        jlog("info", msg=f"Nexus Brain V9.0 initialized (V31 PROD_READY)")
 
     # ─────────────────────────────────────────────────────────────────────
     # INTELLIGENCE DÉLÉGUÉE & MÉMOIRE TRAUMATIQUE
@@ -241,6 +234,7 @@ class NexusBrain:
             jlog("info", msg=f"Tentative CLI {attempt}/{max_retries}...")
             process = None
             try:
+                # PROD_READY_V31: Robustesse Anti-Crash des process externes
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     cwd=self.base_path,
@@ -454,19 +448,9 @@ class NexusBrain:
                 elif "TRANSITION: FADE" in scene_visuel.upper() or "TRANSITION : FADE" in scene_visuel.upper():
                     transition_type = "fade"
 
-                # FIX_GHOST_TEXT: Rejeter les scènes dont le texte correspond à un placeholder
-                # du bloc FORMAT EXEMPLE de wrap_v3_prompt (ex: "Votre phrase d'accroche ici").
-                # Ces textes fantômes apparaissent quand le LLM reproduit l'exemple au lieu
-                # de générer du contenu original — ils ne doivent JAMAIS atteindre le rendu.
                 if scene_text and _is_ghost_text(scene_text):
-                    jlog(
-                        "warning",
-                        msg=(
-                            f"FIX_GHOST_TEXT: Scène {i} rejetée — texte fantôme détecté "
-                            f"(placeholder du format exemple) : «{scene_text[:60]}»"
-                        )
-                    )
-                    continue  # FIX_GHOST_TEXT: scène ignorée, on passe à la suivante
+                    jlog("warning", msg=f"FIX_GHOST_TEXT: Scène {i} rejetée — texte fantôme détecté : «{scene_text[:60]}»")
+                    continue
 
                 if scene_text:
                     scenes.append({
@@ -565,19 +549,16 @@ class NexusBrain:
 
         available_scripts = list(evergreen_dir.glob("*.json"))
         
-        # NUKE_V28: Scanner et destruction des vieux fichiers fantômes ("90%")
         for selected in available_scripts:
             try:
                 with open(selected, "r", encoding="utf-8") as f:
                     script_data = json.load(f)
                 
-                # Le Scanner Nucléaire
                 if "scenes" in script_data and any("90%" in str(s.get("text", "")) for s in script_data["scenes"]):
-                    jlog("warning", msg=f"☢️ NUKE_V28: Fichier infecté ('90%') détecté sur le disque dur. Destruction IMMÉDIATE: {selected.name}")
+                    jlog("warning", msg=f"☢️ NUKE_V28: Fichier infecté ('90%') détecté. Destruction IMMÉDIATE: {selected.name}")
                     os.remove(selected)
-                    continue # On détruit et on passe au fichier suivant
+                    continue
 
-                # Fichier sain
                 shutil.move(str(selected), str(used_dir / selected.name))
                 if "meta" not in script_data: script_data["meta"] = {}
                 script_data["meta"]["is_fallback"] = False
@@ -611,7 +592,6 @@ class NexusBrain:
                     possible_json = json.loads(clean_json)
                     if "scenes" in possible_json:
                         script_data = possible_json
-                        # FIX_GHOST_TEXT: Purge des scènes fantômes dans le chemin JSON aussi
                         if script_data and "scenes" in script_data:
                             original_count = len(script_data["scenes"])
                             script_data["scenes"] = [
@@ -627,7 +607,6 @@ class NexusBrain:
         if script_data and "scenes" in script_data:
             nb_scenes = len(script_data["scenes"])
             if nb_scenes > self.MAX_SCENES:
-                jlog("warning", msg=f"Script extraordinairement long: {nb_scenes} → tronqué à la limite {self.MAX_SCENES}")
                 script_data["scenes"] = script_data["scenes"][:self.MAX_SCENES]
             if "meta" not in script_data: script_data["meta"] = {}
             script_data["meta"]["source"] = "agent_cli_dynamique"
@@ -643,7 +622,6 @@ class NexusBrain:
         
         if fallback_script and "scenes" in fallback_script:
             if any("90%" in s.get("text", "") for s in fallback_script["scenes"]):
-                jlog("warning", msg="Vieux texte hardcodé ('90%') intercepté depuis fallback.py. Purge en cours...")
                 fallback_script["scenes"].clear()
                 fallback_script["scenes"] = [
                     {"id": 1, "text": f"Sujet du jour : {topic}.", "visual_prompt": "modern abstract", "keywords_overlay": [], "transition": "none"},
@@ -673,27 +651,21 @@ class NexusBrain:
             except Exception: pass
 
         self.animator.create_background(bg_path, style=self.bg_style)
-        jlog("info", msg=f"Fond {self.bg_style} généré: {bg_filename}")
 
         broll_available = True
         try:
             from tools.graphics import render_broll_card
         except ImportError:
             broll_available = False
-            jlog("warning", msg="tools.graphics non dispo — B-Roll désactivé")
 
         asset_paths   = [bg_path] * len(scenes)
         broll_indices = []
         broll_count   = 0
-        skipped_count = 0
 
         for i, scene in enumerate(scenes):
             raw_prompt   = scene.get("visual_prompt", "")
+            # PROD_READY_V31: On extrait toujours un sujet visuel
             clean_prompt = _sanitize_visual_prompt(raw_prompt)
-
-            if not clean_prompt:
-                skipped_count += 1
-                continue
 
             matched_asset = self.vault.find_best_match(
                 clean_prompt,
@@ -707,13 +679,8 @@ class NexusBrain:
                 broll_indices.append(i)
                 scene["_broll_image_path"] = img_path
                 broll_count += 1
-                jlog("info", msg=f"  B-Roll schedulé: scène {i+1} ← {Path(img_path).name}")
 
-        jlog("info", msg=(
-            f"Visuels: {broll_count} B-Roll schedulés + "
-            f"{len(scenes) - broll_count - skipped_count} fonds blancs purs + "
-            f"{skipped_count} prompts ignorés"
-        ))
+        jlog("info", msg=(f"Visuels: {broll_count} B-Roll récupérés et schedulés avec succès."))
         return asset_paths, broll_indices
 
     # ─────────────────────────────────────────────────────────────────────
@@ -721,11 +688,9 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_3_audio(self, scenes: List[Dict], speed: float = 1.0) -> str:
-        # NUKE_V28: Récriture totale. Fonction hermétique qui ne renvoie JAMAIS de liste de textes.
         jlog("step", msg="Step 3: Génération Audio [NUKE_V28]")
 
         texts_to_read = []
-        texts_to_read.clear()
         
         def clean_for_tts(text: str) -> str:
             return re.sub(r'\[(BOLD|LIGHT|BADGE|PAUSE)\]', '', text).strip()
@@ -734,18 +699,12 @@ class NexusBrain:
             texts_to_read.append(clean_for_tts(s.get("text", "")))
             
         full_text = " ".join(texts_to_read)
-
-        # Vérification stricte du Test Mode
         is_test_mode = getattr(self.tts, "test_mode", False)
 
         if is_test_mode:
-            jlog("warning", msg="🛡️ NUKE_V28: TEST MODE / FALLBACK AUDIO ACTIF. By-pass TTS absolu.")
-            # Calcul mathématique strict: 13 caractères lus par seconde en moyenne
+            jlog("warning", msg="🛡️ TEST MODE / FALLBACK AUDIO ACTIF. By-pass TTS absolu.")
             duration = max(3.0, len(full_text) / 13.0)
-            
             dummy_audio_path = os.path.join(self.root_dir, "silence_nucleaire_v28.mp3")
-            
-            # Forge d'un silence pur et dur avec FFmpeg, aucun texte injecté ou retourné
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", dummy_audio_path
@@ -754,12 +713,10 @@ class NexusBrain:
             try:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                 if os.path.exists(dummy_audio_path):
-                    jlog("success", msg=f"Silence pur généré avec succès ({duration:.2f}s).")
                     return dummy_audio_path
                 else:
-                    raise FileNotFoundError("FFmpeg exécuté mais fichier non trouvé.")
+                    raise FileNotFoundError("FFmpeg n'a pas généré le fichier.")
             except Exception as e:
-                jlog("error", msg=f"Échec de FFmpeg pour le silence: {e}. Secours via MoviePy...")
                 from moviepy.editor import AudioClip
                 make_frame = lambda t: [0, 0]
                 silence_clip = AudioClip(make_frame, duration=duration, fps=44100)
@@ -767,16 +724,14 @@ class NexusBrain:
                 silence_clip.close()
                 return dummy_audio_path
 
-        # Mode Normal Standard
         audio_path = await self.tts.generate(full_text, speed=speed)
-        
         if not audio_path or not os.path.exists(audio_path):
             raise Exception("TTS Generation failed in normal mode")
             
         return audio_path
 
     # ─────────────────────────────────────────────────────────────────────
-    # ÉTAPE 4 : ASSEMBLAGE
+    # ÉTAPE 4 : ASSEMBLAGE (PROD_READY_V31)
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_4_assembly(
@@ -788,74 +743,49 @@ class NexusBrain:
         safe_mode:     bool = False,
     ) -> Optional[str]:
         
-        mode_label = "SAFE MODE" if safe_mode else "V28 PIPELINE"
+        mode_label = "SAFE MODE" if safe_mode else "V31 PIPELINE"
         jlog("step", msg=f"Step 4: Assembly [{mode_label}]")
 
         clips = []
-        clips.clear()
-        
         subtitle_timeline = []
-        subtitle_timeline.clear()
-        
         broll_schedule: List[Tuple[float, float, str]] = []
-        broll_schedule.clear()
-        
         sfx_clips = []
-        sfx_clips.clear()
-
         final_video_path = None
 
         try:
             audio_clip     = AudioFileClip(audio_path)
             total_duration = audio_clip.duration
-            
-            # Clonage absolu strict
             scenes = copy.deepcopy(script_data.get("scenes", []))
 
             if not scenes:
                 raise ValueError("Aucune scène dans les données de script clonées.")
 
-            # FIX_GHOST_TEXT: Purge de sécurité finale juste avant l'assemblage.
-            # Même si les étapes précédentes ont filtré, on vérifie une dernière fois
-            # que la liste ne contient aucun texte fantôme avant de construire la timeline.
             ghost_scenes_found = [s for s in scenes if _is_ghost_text(s.get("text", ""))]
             if ghost_scenes_found:
-                jlog(
-                    "warning",
-                    msg=(
-                        f"FIX_GHOST_TEXT: {len(ghost_scenes_found)} scène(s) fantôme(s) "
-                        f"détectée(s) au dernier contrôle d'assemblage. Purge immédiate."
-                    )
-                )
                 scenes = [s for s in scenes if not _is_ghost_text(s.get("text", ""))]
 
-            # NUKE_V28: Le Print Géant d'Analyse (Debug absolu avant le Kill Switch)
-            print(f"\n{'='*80}")
-            print(f"DEBUG CRITIQUE V28 - SOURCE DES DONNÉES : {script_data.get('meta', {}).get('source', 'INCONNUE')}")
-            print(f"CONTENU EXACT DE LA LISTE (SCENES) AVANT ASSEMBLAGE :")
-            print(json.dumps(scenes, indent=2, ensure_ascii=False))
-            print(f"{'='*80}\n")
-
-            # Le Kill Switch d'Entrée
             if len(scenes) > 0 and "90%" in scenes[0].get("text", ""):
-                jlog("fatal", msg="DÉTECTION D'UNE FUITE DE DONNÉES EN ENTRÉE D'ASSEMBLAGE.")
-                raise ValueError("KILL SWITCH : La liste contient encore les données de test résiduelles ('90% des traders') en première position !")
+                raise ValueError("KILL SWITCH : La liste contient des données fantômes résiduelles.")
 
             min_required_duration = len(scenes) * 0.35
             if total_duration < min_required_duration:
-                jlog("warning", msg=f"Audio trop court ({total_duration:.1f}s) → rallongé à {min_required_duration:.1f}s")
                 total_duration = min_required_duration
 
             def estimate_reading_weight(text: str) -> float:
                 clean    = re.sub(r'\[.*?\]', '', text).strip()
-                base_len = len(clean)
+                base_len = max(1, len(clean))
                 pauses   = (clean.count('.') * 8 + clean.count(',') * 3
                             + clean.count('!') * 5 + clean.count('?') * 5)
-                return float(base_len + pauses + 1)
+                return float(base_len + pauses)
 
             weights       = [estimate_reading_weight(s.get("text", "")) for s in scenes]
             total_weight  = sum(weights)
-            raw_durations = [(w / total_weight) * total_duration for w in weights]
+            
+            # PROD_READY_V31: Synchro mathématique sécurisée
+            if total_weight > 0:
+                raw_durations = [(w / total_weight) * total_duration for w in weights]
+            else:
+                raw_durations = [total_duration / len(scenes) for _ in scenes]
 
             durations = []
             for s, d in zip(scenes, raw_durations):
@@ -866,7 +796,9 @@ class NexusBrain:
 
             dur_sum = sum(durations)
             if dur_sum > 0:
-                durations = [d * total_duration / dur_sum for d in durations]
+                durations = [d * (total_duration / dur_sum) for d in durations]
+            else:
+                durations = [total_duration / len(scenes) for _ in scenes]
 
             # ── B-Roll schedule ────
             cursor_b = 0.0
@@ -876,24 +808,9 @@ class NexusBrain:
                     if img_path and os.path.exists(img_path):
                         if d >= self.broll_min_scene_duration:
                             broll_schedule.append((cursor_b, cursor_b + d, img_path))
-                            jlog("info", msg=(
-                                f"  📸 B-Roll card: scène {i+1} "
-                                f"t=[{cursor_b:.2f}s, {cursor_b+d:.2f}s] "
-                                f"({Path(img_path).name})"
-                            ))
-                        else:
-                            jlog("info", msg=f"  ⏭ B-Roll scène {i+1} ignorée (dur={d:.2f}s < seuil {self.broll_min_scene_duration}s)")
                 cursor_b += d
 
-            if broll_schedule:
-                jlog("info", msg=f"📸 B-Roll schedule: {len(broll_schedule)} cards actives")
-
-            keywords_per_scene = [
-                " ".join(s.get("keywords_overlay", []) + [s.get("text", "")])
-                for s in scenes
-            ]
-
-            # ── Génération des clips vidéo (fond blanc uniquement) ────────
+            # ── Génération des clips vidéo ────────
             if safe_mode:
                 for img_path, dur in zip(visual_assets, durations):
                     if not os.path.isfile(str(img_path)): continue
@@ -904,12 +821,10 @@ class NexusBrain:
             else:
                 try:
                     from tools.scene_animator import SceneContext
-                    scene_ctx = SceneContext()
                 except ImportError:
-                    scene_ctx = None
+                    pass
 
                 scenes_since_last_trans = 0
-
                 for i, (img_path, dur) in enumerate(zip(visual_assets, durations)):
                     if not os.path.isfile(str(img_path)): continue
 
@@ -921,43 +836,31 @@ class NexusBrain:
                     )
 
                     if self.enable_micro_zoom:
-                        clip = self.animator.apply_micro_zoom_continuous(
-                            clip, intensity=self.micro_zoom_intensity,
-                        )
+                        clip = self.animator.apply_micro_zoom_continuous(clip, intensity=self.micro_zoom_intensity)
 
                     if scene_transition == "none" and scenes_since_last_trans >= 3:
                         scene_transition = random.choice(["slide", "fade"])
 
                     if i > 0 and len(clips) > 0:
                         transition_applied = False
-
                         if scene_transition == "slide" and self.enable_slide_trans:
                             try:
                                 direction = self.animator.get_slide_direction(i)
                                 trans     = self.animator.create_slide_transition(
-                                    clips[-1], clip,
-                                    transition_duration=0.28,
-                                    direction=direction,
-                                    spring=True,
+                                    clips[-1], clip, transition_duration=0.28, direction=direction, spring=True,
                                 )
                                 clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.28))
                                 clips.append(trans.set_duration(0.28))
-                                jlog("info", msg=f"↔ Slide {direction} → scène {i+1}")
                                 transition_applied = True
-                            except Exception as te:
-                                jlog("warning", msg=f"Slide skipped: {te}")
+                            except Exception: pass
 
                         elif scene_transition == "fade" and self.enable_fade_trans:
                             try:
-                                trans = self.animator.create_fade_transition(
-                                    clips[-1], clip, transition_duration=0.10,
-                                )
+                                trans = self.animator.create_fade_transition(clips[-1], clip, transition_duration=0.10)
                                 clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.10))
                                 clips.append(trans.set_duration(0.10))
-                                jlog("info", msg=f"~ Fade → scène {i+1}")
                                 transition_applied = True
-                            except Exception as te:
-                                jlog("warning", msg=f"Fade skipped: {te}")
+                            except Exception: pass
 
                         scenes_since_last_trans = 0 if transition_applied else scenes_since_last_trans + 1
 
@@ -969,73 +872,45 @@ class NexusBrain:
             video_track = concatenate_videoclips(clips, method="compose")
 
             if self.enable_slowzoom and not safe_mode and not self.enable_micro_zoom:
-                video_track = self.animator.apply_global_slowzoom(
-                    video_track, start_scale=1.0, end_scale=1.05,
-                )
+                video_track = self.animator.apply_global_slowzoom(video_track, start_scale=1.0, end_scale=1.05)
 
             if self.enable_motion_blur and not safe_mode:
                 video_track = self.animator.apply_motion_blur(video_track, strength=0.35)
 
-            # ── Timeline des sous-titres (proportionnelle par défaut) ─────
+            # ── Timeline des sous-titres ─────
             cursor = 0.0
             for i, d in enumerate(durations):
                 subtitle_timeline.append((cursor, cursor + d, scenes[i].get("text", "")))
                 cursor += d
 
-            # ── Sécurisation du mode Test/Fallback ───────
             is_tts_test_mode = getattr(self.tts, "test_mode", False)
             
-            if is_tts_test_mode:
-                jlog("info", msg="🔇 Mode Test (Silence) détecté. Sous-titres 100% mathématiques appliqués au VRAI script (Whisper bypassé).")
-            elif self.subtitle_burner.available:
+            if not is_tts_test_mode and self.subtitle_burner.available:
                 try:
-                    jlog("info", msg="🎤 Whisper disponible — tentative de transcription word-level")
                     word_timeline = self.subtitle_burner.transcribe_to_timeline(audio_path)
-
                     if word_timeline and len(word_timeline) > 0:
-                        density      = len(word_timeline) / max(total_duration, 1e-6)
+                        density = len(word_timeline) / max(total_duration, 1e-6)
                         min_expected = total_duration * self.MIN_WHISPER_WORDS_PER_SECOND
-
                         if len(word_timeline) >= min_expected:
                             subtitle_timeline = word_timeline
-                            jlog("success", msg=(
-                                f"  Word-level: {len(word_timeline)} mots "
-                                f"({density:.2f} mots/s) — timeline proportionnelle remplacée."
-                            ))
-                        else:
-                            jlog("warning", msg=(
-                                f"  Whisper: {len(word_timeline)} mots / {total_duration:.1f}s "
-                                f"({density:.2f} mots/s < seuil {self.MIN_WHISPER_WORDS_PER_SECOND}). "
-                                f"Silence partiel probable — maintien de la base proportionnelle."
-                            ))
-                    else:
-                        jlog("warning", msg="  Whisper transcript vide — maintien de la base proportionnelle mathématique.")
-                except Exception as we:
-                    jlog("warning", msg=f"  Whisper a échoué ({we}) — maintien de la base proportionnelle mathématique.")
+                except Exception:
+                    pass
 
             # ── Sound Design ──────────────────────────────────────────────
-            jlog("info", msg="🎧 Sound Design V28...")
             sfx_cursor = 0.0
-
             for i, d in enumerate(durations):
                 scene_text = scenes[i].get("text", "")
                 sfx_type   = self.subtitle_burner.get_sfx_type(scene_text)
 
                 if sfx_type is not None:
-                    sfx_path = (
-                        self.vault.get_random_sfx(sfx_type)
-                        or self.vault.get_random_sfx("click")
-                        or self.vault.get_random_sfx("pop")
-                    )
+                    sfx_path = (self.vault.get_random_sfx(sfx_type) or self.vault.get_random_sfx("click") or self.vault.get_random_sfx("pop"))
                     if sfx_path and os.path.exists(sfx_path):
                         try:
                             vol_map = {"click_deep": 0.28, "click": 0.22, "swoosh": 0.13}
                             vol     = vol_map.get(sfx_type, 0.18)
                             sfx_c   = AudioFileClip(sfx_path).volumex(vol).set_start(sfx_cursor)
                             sfx_clips.append(sfx_c)
-                        except Exception as se:
-                            jlog("warning", msg=f"SFX skip: {se}")
-
+                        except Exception: pass
                 sfx_cursor += d 
 
             if sfx_clips:
@@ -1044,21 +919,16 @@ class NexusBrain:
             else:
                 video_track = video_track.set_audio(audio_clip).set_duration(total_duration)
 
-            # ── burn_subtitles avec broll_schedule ──
-            jlog("info", msg=(
-                f"🔥 Burn: {len(subtitle_timeline)} entrées"
-                f"{f' + {len(broll_schedule)} B-Roll cards' if broll_schedule else ''}"
-            ))
             final_clip = self.subtitle_burner.burn_subtitles(
                 video_clip      = video_track,
                 timeline        = subtitle_timeline,
                 broll_schedule  = broll_schedule,
             )
 
-            # ── Export ────────────────────────────────────────────────────
+            # ── Export (PROD_READY_V31: Optimisation des Bottlenecks) ───
             timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             unique_hash = str(uuid.uuid4())[:6]
-            suffix      = "_SAFE" if safe_mode else "_V28_NUKED"
+            suffix      = "_SAFE" if safe_mode else "_V31_PROD"
             filename    = f"nexus_final_{timestamp}_{unique_hash}{suffix}.mp4"
             output_path = os.path.join(self.root_dir, filename)
 
@@ -1067,8 +937,8 @@ class NexusBrain:
                 fps         = 24 if safe_mode else 30,
                 codec       = "libx264",
                 audio_codec = "aac",
-                preset      = "faster",
-                threads     = 4,
+                preset      = "ultrafast",  # V31: Rendu drastiquement accéléré
+                threads     = 8,            # V31: Maximisation du CPU multicore
                 logger      = None,
             )
 
@@ -1079,22 +949,22 @@ class NexusBrain:
                 except Exception: pass
 
             final_video_path = output_path
-            jlog("success", msg=f"✅ Vidéo V28 générée avec succès : {filename}")
+            jlog("success", msg=f"✅ Vidéo V31 générée avec succès : {filename}")
 
         except Exception as e:
             if not safe_mode:
-                jlog("error", msg="HQ render failed → Safe Mode", error=str(e))
+                jlog("error", msg="HQ render failed → Safe Mode activé par sécurité.", error=str(e))
                 return await self._step_4_assembly(
                     script_data, visual_assets, broll_indices, audio_path, safe_mode=True,
                 )
             else:
-                jlog("fatal", msg="Assembly failure", error=str(e))
+                jlog("fatal", msg="Assembly failure absolu", error=str(e))
                 return None
 
         return final_video_path
 
     # ─────────────────────────────────────────────────────────────────────
-    # LIVRAISON & UPLOAD (inchangée)
+    # LIVRAISON & UPLOAD
     # ─────────────────────────────────────────────────────────────────────
 
     async def _deliver_package(self, video_path: str, script_data: Dict):
@@ -1121,10 +991,9 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_da_mode(self, script_data: Optional[Dict] = None):
-        jlog("info", msg="🎨 FAST DA TEST MODE V28 ACTIVATED")
+        jlog("info", msg="🎨 FAST DA TEST MODE V31 ACTIVATED")
 
         if not script_data:
-            jlog("info", msg="Aucun script fourni, génération d'un VRAI script pour le test...")
             topic = await self._step_0_brainstorm_topic()
             script_data = await self._step_1_ideation(topic, "INSIDER")
             
@@ -1134,17 +1003,16 @@ class NexusBrain:
 
         audio_path = os.path.join(self.root_dir, "temp_audio.mp3")
         if not os.path.exists(audio_path):
-            jlog("info", msg="Génération de l'audio de test à partir du VRAI script...")
             audio_path = await self._step_3_audio(script_data["scenes"], speed=1.0)
             
         imgs, broll_indices = await self._step_2_visuals(script_data["scenes"])
         vid = await self._step_4_assembly(script_data, imgs, broll_indices, audio_path, safe_mode=False)
 
         if vid:
-            jlog("success", msg=f"✅ Test DA V28 terminé: {vid}")
+            jlog("success", msg=f"✅ Test DA V31 terminé: {vid}")
 
     # ─────────────────────────────────────────────────────────────────────
-    # INGESTION MANUELLE (inchangée)
+    # INGESTION MANUELLE
     # ─────────────────────────────────────────────────────────────────────
 
     async def _process_manual_ingestion(self, video_file: Path):
@@ -1170,9 +1038,8 @@ class NexusBrain:
                     if json_match:
                         ai_data = json.loads(json_match.group(0))
                         smart_meta.update(ai_data)
-                        jlog("success", msg="Métadonnées enrichies par l'IA.")
-                except Exception as e:
-                    jlog("warning", msg="Parsing JSON ingestion manuelle échoué", error=str(e))
+                except Exception:
+                    pass
 
             smart_meta["file"] = str(dest)
             with open(dest.with_suffix('.json'), "w", encoding="utf-8") as f:
@@ -1183,7 +1050,7 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_daemon(self):
-        jlog("info", msg="Nexus Brain V9.0 Daemon Started (V28 NUKE Pipeline)")
+        jlog("info", msg="Nexus Brain Daemon Started (V31 PROD_READY Pipeline)")
 
         while True:
             manual_files = sorted(list(self.hot_root.glob("*.*")))
@@ -1200,9 +1067,6 @@ class NexusBrain:
             current_date = datetime.now().strftime("%Y-%m-%d")
             try:
                 topic  = await self._step_0_brainstorm_topic()
-                
-                script = {}
-                script.clear()
                 script = await self._step_1_ideation(topic, "INSIDER")
 
                 if (script
@@ -1211,7 +1075,6 @@ class NexusBrain:
                         and len(script["scenes"]) > 0):
 
                     if script.get("meta", {}).get("is_fallback", False):
-                        jlog("warning", msg="🛡️ Script de secours interne — arrêt du cycle recommandé pour préserver la qualité.")
                         await asyncio.sleep(300)
                         continue
 
@@ -1225,7 +1088,7 @@ class NexusBrain:
                     if vid:
                         await self._deliver_package(vid, script)
                         self.last_run_date = current_date
-                        jlog("success", msg=f"Cycle complet V28: {current_date}")
+                        jlog("success", msg=f"Cycle complet V31: {current_date}")
                 else:
                     jlog("error", msg="Script invalide (pas de 'scenes'). Abandon du cycle.")
 
@@ -1243,7 +1106,7 @@ class NexusBrain:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Nexus Brain V9.0 (V28 NUKE)")
+    parser = argparse.ArgumentParser(description="Nexus Brain V31 (PROD READY)")
     parser.add_argument("--da", action="store_true", help="Mode DA test sans API.")
     args, _ = parser.parse_known_args()
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V29: SubtitleBurner — Pipeline Complet Définitif.
+# ARCHITECTURE_MASTER_V30: SubtitleBurner — Pipeline Complet Définitif (V30 Recalibration).
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  DELTA V29 vs V25                                                           ║
@@ -171,7 +171,7 @@ class SparkleEngine:
 
 class SubtitleBurner:
     """
-    ARCHITECTURE_MASTER_V29: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
+    ARCHITECTURE_MASTER_V30: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
 
     Pipeline V29:
         1. split_to_single_words → 1 mot / entrée
@@ -501,7 +501,7 @@ class SubtitleBurner:
         cta_start:      float = None,
     ):
         """
-        ARCHITECTURE_MASTER_V29: Point d'entrée principal.
+        ARCHITECTURE_MASTER_V30: Point d'entrée principal (V30 recalibration).
 
         Paramètres:
             video_clip    : clip MoviePy source (fond blanc)

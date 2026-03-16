@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V29: SceneAnimator — positions broll DÉFINITIVES.
+# ARCHITECTURE_MASTER_V30: SceneAnimator — positions broll DÉFINITIVES (V30 Recalibration).
 #
 # DELTA V29 vs V22:
 #   1. create_broll_card_clip(): center_y_ratio 0.614 → 0.471 (mesuré content center)
@@ -231,7 +231,7 @@ class SceneAnimator:
         card_width_ratio: float   = None,
     ):
         """
-        ARCHITECTURE_MASTER_V29: B-Roll card avec toutes corrections V29.
+        ARCHITECTURE_MASTER_V30: B-Roll card avec corrections V30 (BROLL_CENTER_Y=0.474).
 
         MESURES DÉFINITIVES (frame t=8s, 576×1024):
         ─────────────────────────────────────────────
@@ -255,7 +255,7 @@ class SceneAnimator:
         )
         ch, cw = card_arr.shape[:2]
 
-        # ARCHITECTURE_MASTER_V29: BROLL_CARD_CENTER_Y_RATIO = 0.471
+        # ARCHITECTURE_MASTER_V30: BROLL_CARD_CENTER_Y_RATIO = 0.474
         cx_pos  = (self.W - cw) // 2
         cy_base = int(self.H * BROLL_CARD_CENTER_Y_RATIO)
         cy_pos  = cy_base - ch // 2
