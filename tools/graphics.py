@@ -1,11 +1,35 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V29: Primitives graphiques — corrections radius + CTA card.
+# ARCHITECTURE_MASTER_V31: Primitives graphiques — correction position logo CTA.
 #
-# DELTA V29 vs V22:
-#   1. render_broll_card(): corner_radius 0.064→0.036 (mesuré: 21px@576p = 39px@1080p)
-#   2. render_broll_card(): width ratio 0.524→0.530 (305/576 mesuré)
-#   3. render_cta_card(): NOUVEAU — TikTok logo + searchbar pill sur fond navy
-#   4. render_search_pill(): NOUVEAU — pill searchbar avec icônes vectorielles
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  DELTA V31 vs V29                                                            ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║                                                                              ║
+# ║  FIX #1 — render_cta_card(): position logo TikTok CORRIGÉE                 ║
+# ║    V29/V30: logo_cy calculé avec un offset −0.06H hard-codé :               ║
+# ║      logo_cy = int(canvas_h * 0.461) - logo_size//2 - int(canvas_h * 0.06) ║
+# ║    Ce calcul était doublement faux:                                          ║
+# ║      1. CTA_LOGO_CENTER_Y_RATIO=0.461 était la position du TEXTE TikTok,   ║
+# ║         pas du logo. Mesure V31: logo center = 0.374H.                      ║
+# ║      2. L'offset -0.06H corrigeait partiellement l'erreur #1, mais de       ║
+# ║         façon fragile (0.461 - 0.06 = 0.401 ≈ 0.374 à 2.7% près).          ║
+# ║    V31: logo_cy = int(canvas_h * CTA_LOGO_CENTER_Y_RATIO) - logo_size//2   ║
+# ║    CTA_LOGO_CENTER_Y_RATIO = 0.374 dans config_v31.py (mesuré frame t=41s) ║
+# ║    L'offset hard-codé −0.06H est SUPPRIMÉ.                                 ║
+# ║                                                                              ║
+# ║  FIX #2 — render_cta_card(): texte "TikTok" positionné sur CTA_TIKTOK_TEXT_Y_RATIO ║
+# ║    V29: tt_y = logo_cy + logo_size + int(canvas_h * 0.012)                  ║
+# ║    V31: tt_y calculé directement depuis CTA_TIKTOK_TEXT_Y_RATIO=0.459H     ║
+# ║    Résultat: le texte est toujours à la bonne position même si logo_size    ║
+# ║    change (indépendance du positionnement).                                  ║
+# ║                                                                              ║
+# ║  CONSERVÉ V29 (aucun changement) :                                          ║
+# ║    render_broll_card(): corner_radius 0.036, width 0.530 ✓                  ║
+# ║    render_text_solid() / render_text_gradient() — inchangés ✓               ║
+# ║    _render_tiktok_logo_vector() — inchangé ✓                                ║
+# ║    _render_search_pill() — inchangé ✓                                        ║
+# ║    Gradient LEFT/RIGHT — couleurs héritées de config_v31.py ✓               ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 
 from __future__ import annotations
 import os
@@ -25,6 +49,13 @@ from .config import (
     CTA_SEARCH_HEIGHT_RATIO, CTA_TIKTOK_HANDLE,
     FS_BASE, FS_MIN,
 )
+
+# ARCHITECTURE_MASTER_V31: Import du ratio Y du texte TikTok (nouveau dans config_v31.py).
+# Fallback à 0.459 si l'ancienne config est utilisée (rétrocompatibilité).
+try:
+    from .config import CTA_TIKTOK_TEXT_Y_RATIO
+except ImportError:
+    CTA_TIKTOK_TEXT_Y_RATIO = 0.459
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -149,6 +180,11 @@ def render_text_gradient(
     color_right: tuple = ACCENT_GRADIENT_RIGHT,
     max_w:       int   = 920,
 ) -> np.ndarray:
+    """
+    ARCHITECTURE_MASTER_V31: Gradient TEAL→PINK (corrigé via config_v31.py).
+    color_left  = ACCENT_GRADIENT_LEFT  = (105,228,220) TEAL (début du mot, gauche)
+    color_right = ACCENT_GRADIENT_RIGHT = (208,122,148) PINK (fin du mot, droite)
+    """
     font, final_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36
     cw = tw + pad_x * 2
@@ -195,7 +231,7 @@ def load_asset_image(keyword: str) -> Optional[np.ndarray]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 4 — B-Roll Card (V29: radius CORRIGÉ 0.036, width CORRIGÉ 0.530)
+# BLOC 4 — B-Roll Card (inchangé V31)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_broll_card(
@@ -206,20 +242,18 @@ def render_broll_card(
     shadow_opacity: float = None,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V29: B-Roll card avec valeurs DÉFINITIVES.
+    ARCHITECTURE_MASTER_V29/V31: B-Roll card — valeurs confirmées V31 (inchangées).
 
-    ┌────────────────────┬──────────────┬──────────────┬─────────────────────┐
-    │ Paramètre          │ V25          │ V29 (mesuré) │ Méthode             │
-    ├────────────────────┼──────────────┼──────────────┼─────────────────────┤
-    │ card_width         │ W × 0.524    │ W × 0.530    │ 305px / 576px       │
-    │ corner_radius      │ W × 0.064    │ W × 0.036    │ bord courbe tracé   │
-    │                    │              │ = 39px@1080p │ 21px@576p mesuré    │
-    │ shadow_opacity     │ 0.33         │ 0.33         │ confirmé            │
-    │ shadow_pad         │ 40px         │ 40px         │ confirmé            │
-    └────────────────────┴──────────────┴──────────────┴─────────────────────┘
+    ┌────────────────────┬──────────────┬─────────────────────────────────────┐
+    │ Paramètre          │ Valeur V31   │ Mesure                              │
+    ├────────────────────┼──────────────┼─────────────────────────────────────┤
+    │ card_width         │ W × 0.530   │ 307px / 576px — confirmé V31        │
+    │ corner_radius      │ W × 0.036   │ ~20px @576p = ~37px @1080p          │
+    │ shadow_opacity     │ 0.33        │ confirmé V31                         │
+    │ shadow_pad         │ 40px        │ confirmé V31                         │
+    └────────────────────┴──────────────┴─────────────────────────────────────┘
     """
     card_w  = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
-    # ARCHITECTURE_MASTER_V29: ratio 0.036 = 21px@576p = 39px@1080p (CORRIGÉ)
     radius  = corner_radius if corner_radius is not None else int(canvas_w * BROLL_CARD_RADIUS_RATIO)
     s_blur  = shadow_blur    if shadow_blur    is not None else BROLL_SHADOW_BLUR
     s_opa   = shadow_opacity if shadow_opacity is not None else BROLL_SHADOW_OPACITY
@@ -258,41 +292,32 @@ def render_broll_card(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 5 — CTA Card (V29 NOUVEAU)
+# BLOC 5 — CTA Card (V31: position logo CORRIGÉE)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_tiktok_logo_vector(size: int) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V29: Logo TikTok vectoriel (approximation PIL).
+    ARCHITECTURE_MASTER_V29/V31: Logo TikTok vectoriel (inchangé V31).
 
-    Le logo TikTok est une note de musique stylisée avec:
-    - Corps principal: blanc
-    - Ombre teal (cyan) décalée à gauche
-    - Ombre rouge décalée à droite
-    Taille paramétrique: size px (côté du carré conteneur)
+    Note de musique stylisée:
+    - Corps blanc principal
+    - Ombre teal décalée à gauche  (0, 242, 234)
+    - Ombre rouge décalée à droite (255, 0, 80)
     """
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
-    # Le logo est centré dans le carré
-    # Proportions basées sur le logo officiel SVG
     cx, cy = size // 2, size // 2
-    body_w = int(size * 0.35)
-    body_h = int(size * 0.55)
     stem_w = int(size * 0.12)
     note_r = int(size * 0.18)
 
-    # Note de musique simplifiée: ellipse + tige
     def draw_note(draw_ref, offset_x, offset_y, color):
-        # Ellipse (tête de la note, bas)
         ex = cx + offset_x - note_r
         ey = cy + offset_y + int(size * 0.15)
         draw_ref.ellipse([ex, ey, ex + note_r*2, ey + note_r*2], fill=color)
-        # Tige (droite, montant)
         sx = cx + offset_x + note_r - stem_w
         sy = cy + offset_y - int(size * 0.30)
         draw_ref.rectangle([sx, sy, sx + stem_w, ey + note_r], fill=color)
-        # Courbe supérieure droite (tête de courche)
         hx = sx
         hy = sy
         draw_ref.ellipse([hx - int(size*0.10), hy,
@@ -309,35 +334,33 @@ def _render_tiktok_logo_vector(size: int) -> np.ndarray:
 
 
 def _render_search_pill(
-    width:   int,
-    height:  int,
-    handle:  str = "@tekiyo_",
-    bg:      tuple = (255, 255, 255),
+    width:      int,
+    height:     int,
+    handle:     str   = "@tekiyo_",
+    bg:         tuple = (255, 255, 255),
     text_color: tuple = (30, 30, 30),
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V29: Search bar pill avec icônes.
+    ARCHITECTURE_MASTER_V29/V31: Search bar pill (inchangée V31).
 
-    Layout mesuré (cta_0030.png):
-      - BG blanc, contour fin gris clair
-      - Icône loupe à gauche (noir)
-      - Texte handle centré (gris foncé)
-      - Mini logo TikTok à droite (rouge/cyan)
+    Layout mesuré t=41.0s:
+      - BG blanc, contour gris clair
+      - Icône loupe à gauche
+      - Texte handle centré
+      - Mini logo TikTok à droite
     """
     radius = height // 2
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
-    # Fond blanc arrondi
     draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius, fill=bg+(255,))
-    # Contour léger
     draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
                             outline=(180, 180, 185, 255), width=2)
 
-    icon_size  = int(height * 0.55)
-    pad        = int(height * 0.25)
+    icon_size = int(height * 0.55)
+    pad       = int(height * 0.25)
 
-    # Icône loupe (cercle + ligne)
+    # Icône loupe
     lx, ly = pad, (height - icon_size) // 2
     sr = int(icon_size * 0.38)
     draw.ellipse([lx, ly, lx + sr*2, ly + sr*2], outline=(80, 80, 80, 255), width=2)
@@ -354,17 +377,14 @@ def _render_search_pill(
     ty        = (height - th) // 2
     draw.text((tx, ty), handle, font=font, fill=text_color + (255,))
 
-    # Mini logo TikTok droite (deux cercles colorés)
-    rx    = width - pad - icon_size
-    ry    = (height - icon_size) // 2
-    cr    = icon_size // 4
-    # teal
+    # Mini logo TikTok droite
+    rx = width - pad - icon_size
+    ry = (height - icon_size) // 2
+    cr = icon_size // 4
     draw.ellipse([rx + cr, ry, rx + cr + cr*2, ry + cr*2],
                  fill=(0, 200, 180, 200))
-    # rouge
     draw.ellipse([rx + cr + int(cr*0.7), ry, rx + cr + int(cr*0.7) + cr*2, ry + cr*2],
                  fill=(255, 0, 60, 200))
-    # blanc centre (overlap)
     draw.ellipse([rx + cr + int(cr*0.35), ry + int(cr*0.15),
                   rx + cr + int(cr*0.35) + int(cr*1.3), ry + int(cr*0.15) + int(cr*1.3)],
                  fill=(255, 255, 255, 255))
@@ -373,27 +393,31 @@ def _render_search_pill(
 
 
 def render_cta_card(
-    canvas_w:     int,
-    canvas_h:     int,
-    handle:       str   = None,
-    logo_scale:   float = 1.0,
+    canvas_w:   int,
+    canvas_h:   int,
+    handle:     str   = None,
+    logo_scale: float = 1.0,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V29: CTA card TikTok complète sur fond navy.
+    ARCHITECTURE_MASTER_V31: CTA card TikTok complète sur fond navy.
 
-    COMPOSANTS (mesurés sur cta_0030.png / 576×1024):
-      1. Fond: rgb(14,14,26) navy plein canvas
-      2. Logo TikTok (taille ~0.20W) centré à Y=0.461H
-      3. Texte "TikTok" (white, bold) sous le logo
-      4. Search pill (@handle) centré à Y=0.571H, width=0.618W
+    CORRECTION V31 — Positions mesurées frame-exact t=41.0s (576×1024):
+        Bright band 336-431px → center = 383px / 1024px = 0.374H ← LOGO
+        Bright band 453-488px → center = 470px / 1024px = 0.459H ← Texte "TikTok"
+        Bright band 561-610px → center = 585px / 1024px = 0.571H ← Search pill
 
-    Returns: RGBA array canvas_w × canvas_h
+    V29/V30 plaçait le logo à:
+        logo_cy = int(canvas_h * 0.461) - logo_size//2 - int(canvas_h * 0.06)
+        ≈ 0.461H − 0.06H = 0.401H  (offset hard-codé qui compensait partiellement l'erreur)
+    V31 place le logo à:
+        logo_cy = int(canvas_h * CTA_LOGO_CENTER_Y_RATIO) - logo_size//2
+        = int(canvas_h * 0.374) - logo_size//2  ← CORRECT, sans offset
     """
     if handle is None:
         handle = CTA_TIKTOK_HANDLE
 
+    # ── Fond navy ────────────────────────────────────────────────────────────
     canvas_arr = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
-    # Fond navy
     canvas_arr[:, :, 0] = CTA_BG_COLOR[0]
     canvas_arr[:, :, 1] = CTA_BG_COLOR[1]
     canvas_arr[:, :, 2] = CTA_BG_COLOR[2]
@@ -401,21 +425,30 @@ def render_cta_card(
 
     canvas = Image.fromarray(canvas_arr, mode="RGBA")
 
-    # ── Logo TikTok ──────────────────────────────────────────────────────────
+    # ── Logo TikTok ───────────────────────────────────────────────────────────
     logo_size = int(canvas_w * 0.20 * logo_scale)
     logo_arr  = _render_tiktok_logo_vector(logo_size)
     logo_img  = Image.fromarray(logo_arr, mode="RGBA")
 
     logo_cx = (canvas_w - logo_size) // 2
-    logo_cy = int(canvas_h * CTA_LOGO_CENTER_Y_RATIO) - logo_size // 2 - int(canvas_h * 0.06)
+
+    # ARCHITECTURE_MASTER_V31: FIX — suppression de l'offset hard-codé -0.06H.
+    # V29 avait: logo_cy = int(canvas_h * 0.461) - logo_size//2 - int(canvas_h * 0.06)
+    # V31 a   : logo_cy = int(canvas_h * 0.374) - logo_size//2
+    # CTA_LOGO_CENTER_Y_RATIO = 0.374 dans config_v31.py (mesuré frame-exact).
+    logo_cy = int(canvas_h * CTA_LOGO_CENTER_Y_RATIO) - logo_size // 2
     canvas.paste(logo_img, (logo_cx, logo_cy), mask=logo_img.split()[3])
 
-    # ── Texte "TikTok" ───────────────────────────────────────────────────────
+    # ── Texte "TikTok" ────────────────────────────────────────────────────────
+    # ARCHITECTURE_MASTER_V31: position calculée depuis CTA_TIKTOK_TEXT_Y_RATIO=0.459H
+    # V29 calculait tt_y = logo_cy + logo_size + offset → dépendait de logo_size.
+    # V31 positionne indépendamment depuis la mesure directe de la bande de texte.
     tt_font_size = max(30, int(canvas_w * 0.085))
     tt_font      = find_font("bold", tt_font_size)
     tt_tw, tt_th = measure_text("TikTok", tt_font)
     tt_x         = (canvas_w - tt_tw) // 2
-    tt_y         = logo_cy + logo_size + int(canvas_h * 0.012)
+    # Centrage vertical sur CTA_TIKTOK_TEXT_Y_RATIO
+    tt_y         = int(canvas_h * CTA_TIKTOK_TEXT_Y_RATIO) - tt_th // 2
 
     draw = ImageDraw.Draw(canvas)
     draw.text((tt_x, tt_y), "TikTok", font=tt_font, fill=(255, 255, 255, 255))

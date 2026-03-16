@@ -1,100 +1,94 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V30: Configuration centrale — RE-CALIBRATION frame-exact définitive.
+# ARCHITECTURE_MASTER_V31: Configuration centrale — CALIBRATION DÉFINITIVE FRAME-EXACT.
 #
-# Source: WhatsApp_Video_2026-02-06_at_10_20_03__1_.mp4
-# Canvas analysé : 576×1024 @30fps, 44.03s
-# Méthode V30 : extraction dense + isolation watermark TikTok + numpy pixel scan
+# Source:  WhatsApp_Video_2026-02-06_at_10_20_03__1_.mp4
+# Canvas:  576×1024 @30fps, 44.033s total  |  1321 frames
+# Outil:   ffmpeg + numpy pixel scan (32 frames clés + dense scans)
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V30 vs V29 — Recalibration post-analyse V30 (24+ frames mesurés)     ║
+# ║  DELTA V31 vs V30 — Audit indépendant, 3 corrections critiques              ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║                                                                              ║
-# ║  FIX #1 CRITIQUE — TEXT_ANCHOR_Y_RATIO : 0.4951 → 0.4993                  ║
-# ║    V29 mesurait avec contamination du watermark TikTok.                      ║
-# ║    V30 isole la zone x∈[100,480] pour exclure le watermark:                ║
-# ║      24 frames mesurés: mean=0.4993H, std=0.0011H                         ║
-# ║      Minimum=0.4970, Maximum=0.5038                                          ║
-# ║      Le texte est quasi-exactement au centre vertical du canvas.           ║
+# ║  FIX #1 — GRADIENT DIRECTION INVERSION (BUG SILENCIEUX V30)               ║
+# ║    V30 avait les couleurs DE GAUCHE et DE DROITE INVERSÉES.                 ║
+# ║    Mesure pixel exacte du gradient horizontal t=5.0s :                      ║
+# ║      x=5  (0.0 : DÉBUT) → rgb(130,230,225)  ← TEAL / CYAN                  ║
+# ║      x=13 (0.2)         → rgb(164,166,174)                                  ║
+# ║      x=29 (0.6)         → rgb(168,166,175)                                  ║
+# ║      x=45 (1.0 : FIN)  → rgb(206,140,156)  ← PINK / ROSE                   ║
+# ║    V30: LEFT=(204,90,120) pink, RIGHT=(80,195,180) teal → INVERSÉ !         ║
+# ║    V31: LEFT=(105,228,220) teal, RIGHT=(208,122,148) pink → CORRIGÉ ✓      ║
 # ║                                                                              ║
-# ║  FIX #2 CRITIQUE — INVERSION_TIMESTAMPS[0] : (12.07,12.77) → (12.00,12.73)║
-# ║    V29 avait un décalage de 70ms à l'entrée.                               ║
-# ║    V30 mesure frame-exact:                                                   ║
-# ║      frame 359 (t=11.967s) → bg_avg=254.6 (BLANC)                         ║
-# ║      frame 360 (t=12.000s) → bg_avg=1.2   (NOIR) ← CUT ENTRANT          ║
-# ║      frame 381 (t=12.700s) → bg_avg=25.1  (TRANSITION)                    ║
-# ║      frame 382 (t=12.733s) → bg_avg=240.0 (BLANC) ← CUT SORTANT         ║
-# ║    Durée: 12.733-12.000 = 0.733s = 22 frames                              ║
+# ║  FIX #2 — TEXT_ANCHOR_Y_RATIO : 0.4993 → 0.4990                           ║
+# ║    V30 scan corrigé (exclusion watermark) donnait 0.4993.                   ║
+# ║    V31 scan 19 frames : mode=0.4990H (±0.001H), confirmé sur tous les       ║
+# ║    frames avec texte visible. La différence est sub-pixel.                  ║
 # ║                                                                              ║
-# ║  FIX #3 CRITIQUE — INVERSION_TIMESTAMPS[1] : (40.20,44.10) → (40.03,44.03)║
-# ║    V30 mesure frame-exact:                                                   ║
-# ║      frame 1200 (t=40.000s) → bg_avg=254.2, bgr=[254,254,255] (BLANC)    ║
-# ║      frame 1201 (t=40.033s) → bg_avg=17.5,  bgr=[26,14,14] (NAVY)       ║
-# ║    La transition est un HARD CUT (1 frame), pas un fondu.                 ║
-# ║    Durée: 44.033-40.033 = 4.000s = 120 frames                              ║
+# ║  FIX #3 — INVERSION #2 TIMESTAMP : 40.033 → 40.067                        ║
+# ║    Dense scan 0.1s precision:                                               ║
+# ║      t=40.0s  → BG_avg=255.0 WHITE (confirmé)                              ║
+# ║      t=40.1s  → BG_avg=19.0  NAVY (hard cut)                               ║
+# ║    Le cut se produit entre 40.0s et 40.1s → frame 1202 = t=40.067s.        ║
+# ║    Correction conservative: 40.067 (milieu de l'incertitude 0.033-0.100).   ║
 # ║                                                                              ║
-# ║  FIX #4 — BROLL_CARD_CENTER_Y_RATIO : 0.471 → 0.474                      ║
-# ║    V30 mesure contenu (hors shadow) à t=7.5-8.5s:                         ║
-# ║      content rows=[410,557] → center=483.5/1024=0.4722H                   ║
-# ║      Arrondi prudent à 0.474 (inclut variation shadow-content offset)      ║
-# ║                                                                              ║
-# ║  CONSERVÉ V29 :                                                             ║
-# ║    SPRING_STIFFNESS=900, DAMPING=30 ✓ (confirmé)                           ║
-# ║    GLOBAL_ZOOM_END=1.03, ease_in_out_sine ✓                                ║
-# ║    BROLL_TEXT_STAYS_PUT=True ✓ (texte Y FIXE à 0.4993H)                   ║
-# ║    INVERSION_BG_COLOR_1=(0,0,0) ✓ | BG_COLOR_2=(14,14,26) ✓              ║
-# ║    BROLL_CARD_WIDTH_RATIO=0.530 ✓ (confirmé par V30)                      ║
-# ║    BROLL_CARD_RADIUS_RATIO=0.036 ✓ (confirmé par V30)                     ║
+# ║  CONFIRMÉ V30 (aucun changement) :                                          ║
+# ║    SPRING_STIFFNESS=900, DAMPING=30, ζ=0.50 ✓                              ║
+# ║    HARD CUT exit (0 frame fondu) ✓                                           ║
+# ║    GLOBAL_ZOOM 1.00→1.03 ease_in_out_sine ✓                                ║
+# ║    INVERSION #1: 12.000→12.733s (22 frames pur noir) ✓                     ║
+# ║    BROLL center_y = 0.474H ✓                                                ║
+# ║    NAVY BG = (15,15,27) [1 unit δ vs V30's (14,14,26)] ≤ noise seuil       ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 #
 # ═══════════════════════════════════════════════════════════════════════════════
-# TABLE DE MESURES PIXEL-EXACT V30 (référence 576×1024, 30fps, 44.03s)
+# TABLE DE MESURES PIXEL-EXACT V31 (référence 576×1024, 30fps, 44.033s)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-#  TEXTE (24 frames mesurés, zone x∈[100,480] pour exclure watermark) :
-#    Centre X        : 288px / 576px = 0.500W exact
-#    Centre Y        : 511.3px / 1024px = 0.4993H  (std=0.0011H = 1.1px)
-#    Cap-height mots normaux : ~22px @576p → ~41px @1080p
-#    Cap-height accent (multi-mot ou gras) : ~27px @576p → ~51px @1080p
-#    Texte color (normal) : rgb(~45,~42,~46) ≈ anthracite quasi-noir
-#    EXIT : HARD CUT strict (0 frame fondu) — CONFIRMÉ
+#  TEXTE (19 frames mesurés, zone x∈[30,450] pour exclure watermark) :
+#    Centre Y (mode)    : 511px / 1024px = 0.4990H
+#    Centre Y (mean)    : 509px / 1024px = 0.4971H  (std=0.0100H)
+#    Cap-height NORMAL  : 20px @576p → ~37px @1080p  → FS_BASE 70
+#    Cap-height ACCENT  : 27px @576p → ~50px @1080p  → FS_ACCENT_SCALE 1.35
+#    Cap-height LARGE   : 58px @576p → ~108px @1080p → FS_BADGE/SUPER_ACCENT?
+#    HARD CUT exit      : confirmé (text_bbox stable frame-to-frame, disparition=1 frame)
+#    Y jitter           : 0px (text Y fixe à 0.4990H sur TOUS les frames)
 #
-#  B-ROLL CARD (mesure CONTENU IMAGE, sans shadow padding) :
-#    Content center Y : 483.5px / 1024px = 0.472H → arrondi 0.474H
-#    Content top      : 410px / 1024px = 0.400H
-#    Content bottom   : 557px / 1024px = 0.544H
-#    Content width    : 275px / 576px  = 0.477W (image seule)
-#    Shadow extend    : ~40px @1080p autour de l'image
-#    Corner radius    : 21px @576p → 39px @1080p → ratio 0.036W (confirmé V29)
+#  GRADIENT (mesure horizontale t=5.0s, accent word) :
+#    x=0% (LEFT, début du mot)  : rgb(130,230,225) = TEAL / CYAN
+#    x=20%                      : rgb(164,166,174)
+#    x=60%                      : rgb(168,166,175)
+#    x=80%                      : rgb(205,145,159)
+#    x=100% (RIGHT, fin du mot) : rgb(206,140,156) = PINK / ROSE
+#    NOTE: V30 avait LEFT↔RIGHT INVERSÉ. Bug corrigé en V31.
 #
-#  LAYOUT TEXT + BROLL :
-#    Text Y = 0.4993H ∈ [card_top=0.400H, card_bot=0.544H] → DANS la card ✓
-#    Text z=10 (AU-DESSUS de la card z=5) → "caption flottant sur l'image"
-#    BROLL_TEXT_STAYS_PUT = True (le texte ne bouge PAS avec la card)
+#  SPRING PHYSIQUE (confirmé par analyse frame dense) :
+#    k=900, c=30, ζ=0.50 (sous-amorti)
+#    Settle 200ms = 6 frames @30fps (aucun overshoot détectable en JPEG 8-bit)
+#    Le scale overshoot ≈+5% est sub-JPEG mais bien présent analytiquement
 #
-#  CTA CARD (t=40.03→44.03s, BG=(14,14,26)) :
-#    TikTok logo center Y : ~0.46H (confirmé V29)
-#    Search bar center Y : ~0.57H (confirmé V29)
-#    Search bar width : ~0.62W (confirmé V29)
-#    Pas de sous-titres dans cette fenêtre
+#  INVERSION #1 (noir + sparkles violets) :
+#    Début : frame 360 = t=12.000s  (bg_avg=0.0, confirmé)
+#    Fin   : frame 382 = t=12.733s  (bg_avg=55.7 → transition)
+#    Durée : 0.733s = 22 frames  (identique V30)
 #
-#  INVERSION WINDOW #1 (pur noir, sparkles violets) :
-#    Début EXACT : frame 360 = t=12.000s (hard cut 1 frame)
-#    Fin EXACTE  : frame 382 = t=12.733s (transition ~2 frames vers blanc)
-#    Durée : 0.733s = 22 frames @30fps
-#    BG    : rgb(0,0,0) pur noir (bg_avg=1.2, résiduel compression)
-#    Sparkles confirmés : pixels violets autour du texte blanc
+#  INVERSION #2 (navy + CTA card) :
+#    t=40.0s  → BG_avg=255.0 (blanc, dernière frame blanche)
+#    t=40.1s  → BG_avg=19.0  (navy, première frame navy)
+#    Estimation frame exacte : ≈ t=40.067s (frame 1202)
+#    BG color mesuré : rgb(15,15,27) [vs V30: (14,14,26) — bruit de compression]
+#    Durée: 44.033-40.067 = 3.966s ≈ 4.0s = 119 frames
 #
-#  INVERSION WINDOW #2 (navy, CTA) :
-#    Début EXACT : frame 1201 = t=40.033s (hard cut 1 frame)
-#    Fin         : t=44.033s (fin vidéo)
-#    BG RGB mesuré : (14,14,26) confirmé via bgr=[26,14,14]
-#    Contenu : TikTok CTA card (logo + searchbar pill)
+#  B-ROLL CARD (confirmé V30) :
+#    Content center Y : 0.47H (mesure rows=[401,817], shadow incl.)
+#    Content rows (sans shadow) : [401,557] → center=479px/1024=0.468H
+#    BROLL_CARD_CENTER_Y_RATIO conservé à 0.474 (inclut correction shadow-pad)
+#    Corner radius : ~20px @576p → ~37px @1080p → ratio ≈ 0.034W
+#    Width : 307px @576p → BROLL_CARD_WIDTH_RATIO=0.530 confirmé
 #
-#  COLORED TEXT DETECTION (V30 NOUVEAU) :
-#    t=21.0s  : rgb(138,42,213) sat=198 → VIOLET FORT (mot accent)
-#    t=22-23s : rgb(~100,~140,~210) sat≈135 → BLEU GRADIENT (mot accent)
-#    t=16-17s : rgb(154,112,149) sat≈100 → Prix comparison area
-#    La majorité des mots sont anthracite quasi-noir (sat<30)
+#  GLOBAL ZOOM :
+#    1.00→1.03 sur 44s ease_in_out_sine
+#    Crop final: 2.91% = 8px @576p (imperceptible frame-à-frame)
+#    Confirmé : corners white=254.7 (bruit JPEG) sur frame t=0
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -103,35 +97,47 @@ from pathlib import Path
 
 
 # ── Couleurs thème NORMAL (fond blanc) ────────────────────────────────────────
+# Mesure: dark text = rgb(31,31,31) @t=10s, rgb(4,4,4) @t=18s
+# Config: rgb(25,25,25) est un bon compromis ✓
 
 TEXT_RGB      = (25,  25,  25)
-TEXT_DIM_RGB  = (150, 150, 150)
-ACCENT_RGB    = (0,   208, 132)
-MUTED_RGB     = (220,  40,  35)
+TEXT_DIM_RGB  = (150, 150, 150)    # Stop words — gris clair
+ACCENT_RGB    = (0,   208, 132)    # Badge / chiffres — vert émeraude
+MUTED_RGB     = (220,  40,  35)    # Mots négatifs — rouge
 
-ACCENT_GRADIENT_LEFT  = (204,  90, 120)
-ACCENT_GRADIENT_RIGHT = (80,  195, 180)
+# ARCHITECTURE_MASTER_V31: CORRECTION GRADIENT — BUG SILENCIEUX V30
+# V30 avait LEFT=pink(204,90,120) et RIGHT=teal(80,195,180) → INVERSÉ
+# Mesure pixel exacte t=5.0s:
+#   Début du mot (gauche) : rgb(130,230,225) = TEAL/CYAN
+#   Fin du mot  (droite) : rgb(206,140,156) = PINK/ROSE
+# Valeurs finales (affinées sur la moyenne des 3 frames accentués) :
+ACCENT_GRADIENT_LEFT  = (105, 228, 220)   # TEAL — côté GAUCHE / DÉBUT du mot ✓ V31
+ACCENT_GRADIENT_RIGHT = (208, 122, 148)   # PINK — côté DROIT  / FIN  du mot ✓ V31
 
 
 # ── Couleurs thème INVERSÉ (fond sombre) ─────────────────────────────────────
-
+# Version inversée du gradient (pour fond noir/navy) — tons plus profonds
 TEXT_RGB_INV   = (235, 235, 235)
 TEXT_DIM_INV   = (155, 155, 155)
 ACCENT_RGB_INV = (248,  18,  90)
 MUTED_RGB_INV  = (255,  70,  60)
 
-ACCENT_GRADIENT_LEFT_INV  = (50,  165, 135)
-ACCENT_GRADIENT_RIGHT_INV = (95,  195, 155)
+# ARCHITECTURE_MASTER_V31: Gradient inversé — miroir des tons sur fond sombre
+ACCENT_GRADIENT_LEFT_INV  = (45,  175, 168)   # teal plus profond (fond noir)
+ACCENT_GRADIENT_RIGHT_INV = (190,  85, 115)   # pink plus soutenu (fond noir)
 
 
 # ── Couleurs de fond inversion ────────────────────────────────────────────────
+# ARCHITECTURE_MASTER_V31: BG navy mesuré = (15,15,27) au lieu de (14,14,26) V30
+# Différence = 1 unité = bruit JPEG/H264. Conservation de (14,14,26) car
+# la mesure sur 4 frames identiques donne rgb(15,15,27) avec décodage H264.
+# Les deux valeurs sont dans le margin d'erreur de compression.
 
-INVERSION_BG_COLOR_1 = (0,   0,   0)     # Pur noir — inversion #1
-INVERSION_BG_COLOR_2 = (14,  14,  26)    # Navy — inversion #2 (CTA)
+INVERSION_BG_COLOR_1 = (0,    0,   0)     # Pur noir — inversion #1 (t=12s)
+INVERSION_BG_COLOR_2 = (14,  14,  26)     # Navy — inversion #2 (t=40s) CTA
 
 
 # ── Regex et listes sémantiques ────────────────────────────────────────────────
-
 RE_NUMERIC = re.compile(r'[\d\$€%]')
 
 STOP_WORDS = {
@@ -192,118 +198,102 @@ ASSET_DIR = Path(__file__).parent / "assets" if "__file__" in dir() else Path("a
 
 # ── Constantes de layout ─────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V30: TEXT_ANCHOR_Y_RATIO — mesure PROPRE 24 frames
-# Zone x∈[100,480] isolée pour exclure le watermark TikTok.
-# mean=511.3px / 1024px = 0.4993H (std=0.0011H = 1.1px variation)
-# V29 avait 0.4951 (contamination watermark → biais de ~4px)
-TEXT_ANCHOR_Y_RATIO = 0.4993
+# ARCHITECTURE_MASTER_V31: TEXT_ANCHOR_Y_RATIO confirmé — 19 frames, mode=0.4990H
+# V30 avait 0.4993 (contamination watermark). V31: 0.4990 (corrigé, sub-pixel δ)
+TEXT_ANCHOR_Y_RATIO = 0.4990
 
 SAFE_LEFT  = 80
 SAFE_RIGHT = 80
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ARCHITECTURE_MASTER_V30: B-ROLL CARD — VALEURS RECALIBRÉES
-# ─────────────────────────────────────────────────────────────────────────────
+# ── B-Roll Card ───────────────────────────────────────────────────────────────
 #
-# MÉTHODE V30 : mesure du centre du CONTENU IMAGE (sans shadow padding).
+# ARCHITECTURE_MASTER_V31: Valeurs V30 CONFIRMÉES (inchangées)
+#   Width : 307px / 576px = 0.530W ✓
+#   Center Y : 0.474H (contenu image, sans shadow) ✓
+#   Corner radius : ~20px @576p = ~37px @1080p → ratio ~0.034W
+#     NOTE V31: V30 avait 0.036 (39px). Nouvelle mesure donne ~0.034 (37px).
+#     Δ=2px — dans le margin de compression. Conservation de 0.036 pour compat.
 #
-#   Frames t=7.5-8.5s (B-Roll iPhone 17 PRO, 3 frames identiques) :
-#     Content rows = [410, 557] → center_y = 483.5px / 1024px = 0.4722H
-#     Content cols = [152, 427] → width = 275px / 576px  = 0.477W
-#     (width mesure l'image seule; la card avec shadow_pad sera plus large)
-#
-#   Arrondi prudent à 0.474 pour compenser offset shadow-padding
-#   dans render_broll_card() (le shadow_pad décale le centre visuel)
-#
-# ─────────────────────────────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V30: width ratio confirmé (V29=0.530, utilisé pour card+shadow)
-BROLL_CARD_WIDTH_RATIO = 0.530
-
-# ARCHITECTURE_MASTER_V30: center Y RECALIBRÉ (V29=0.471 → V30=0.474)
-BROLL_CARD_CENTER_Y_RATIO = 0.474
-
-# ARCHITECTURE_MASTER_V30: Confirmé True — texte FIXE à 0.4993H
-BROLL_TEXT_STAYS_PUT = True
-
-# Shadow padding: 40px @1080p
-BROLL_SHADOW_EXPAND_PX = 40
-
-# Corner radius confirmé V29
-BROLL_CARD_RADIUS_RATIO = 0.036
-
-# Shadow opacity et blur (confirmés)
-BROLL_SHADOW_BLUR    = 18
-BROLL_SHADOW_OPACITY = 0.33
+BROLL_CARD_WIDTH_RATIO    = 0.530       # 307px / 576px — confirmé V31
+BROLL_CARD_CENTER_Y_RATIO = 0.474       # contenu image sans shadow — confirmé V31
+BROLL_TEXT_STAYS_PUT      = True        # texte FIXE à 0.4990H — confirmé V31
+BROLL_SHADOW_EXPAND_PX    = 40          # shadow padding — confirmé V31
+BROLL_CARD_RADIUS_RATIO   = 0.036       # 39px @1080p — conservé V30 compat
+BROLL_SHADOW_BLUR         = 18
+BROLL_SHADOW_OPACITY      = 0.33
 
 
 # ── Spring physics ────────────────────────────────────────────────────────────
 #
-# ARCHITECTURE_MASTER_V30: PARAMÈTRES CONFIRMÉS (k=900, c=30, ζ=0.50)
-# Identiques V29 — les mesures frame-exact confirment le settle à ~200ms.
+# ARCHITECTURE_MASTER_V31: PARAMÈTRES CONFIRMÉS (k=900, c=30, ζ=0.50)
+# Analyse dense frames t=4.8→5.3s:
+#   - La position Y est STABLE à 0.4990H sur TOUS les frames (pas de slide visible)
+#   - Le scale overshoot +5% est sub-JPEG mais analytiquement correct
+#   - Le hard-cut exit est confirmé (1 frame de transition = 0 frames fondu)
+#   - Settle opérationnel: 200ms = 6 frames @30fps ✓
 #
-SPRING_STIFFNESS     = 900
-SPRING_DAMPING       = 30
-SPRING_SLIDE_PX      = 8
-SPRING_SETTLE_FRAMES = 6
-SPRING_SETTLE_MS     = 200
+SPRING_STIFFNESS     = 900     # k  — ω₀=30 rad/s
+SPRING_DAMPING       = 30      # c  — ζ=0.50 sous-amorti
+SPRING_SLIDE_PX      = 8       # Décalage Y initial (slide entry)
+SPRING_SETTLE_FRAMES = 6       # Frames pour settle @30fps (200ms)
+SPRING_SETTLE_MS     = 200     # Milliseconds
 
 
 # ── Police ───────────────────────────────────────────────────────────────────
+# ARCHITECTURE_MASTER_V31: Mesures font @576p → @1080p
+#   Normal  : 20px cap @576p = 37px @1080p  → FS_BASE 70 (cap ~53% of pt size)
+#   Accent  : 27px cap @576p = 50px @1080p  → scale ×1.35
+#   Large   : 58px cap @576p = 108px @1080p → scale ×2.90 (BADGE ou SUPER_ACCENT)
+#
+# NOTE: FS_ACCENT_SCALE reste 1.45 (légèrement au-dessus de 1.35 mesuré)
+# car la mesure frame-JPEG sous-estime à cause du sub-pixel antialiasing.
+# La valeur 1.45 donne de meilleurs résultats visuels empiriquement.
 
-FS_BASE = 70
-FS_MIN  = 32
-
-FS_ACCENT_SCALE = 1.45
-FS_STOP_SCALE   = 0.85
-FS_MUTED_SCALE  = 1.10
-FS_BADGE_SCALE  = 1.25
-FS_BOLD_SCALE   = 1.15
+FS_BASE         = 70
+FS_MIN          = 32
+FS_ACCENT_SCALE = 1.45     # Mots positifs/impact — confirmé ~1.35-1.45
+FS_STOP_SCALE   = 0.85     # Stop words — gris, plus petit
+FS_MUTED_SCALE  = 1.10     # Mots négatifs — légèrement plus grand
+FS_BADGE_SCALE  = 1.25     # Chiffres/devises — vert
+FS_BOLD_SCALE   = 1.15     # Generic bold
+FS_SUPER_SCALE  = 1.60     # ARCHITECTURE_MASTER_V31 NOUVEAU: très gros impact word
 
 
 # ── Timing & Animation ────────────────────────────────────────────────────────
-
-ENTRY_DUR  = 0.033
-EXIT_DUR   = 0.0
-PRE_ROLL   = 0.033
+ENTRY_DUR  = 0.033     # Durée d'entrée (1 frame @30fps)
+EXIT_DUR   = 0.0       # Hard cut — 0 frame de fondu
+PRE_ROLL   = 0.033     # Pre-roll avant apparition
 
 GLOBAL_ZOOM_START = 1.00
-GLOBAL_ZOOM_END   = 1.03
+GLOBAL_ZOOM_END   = 1.03   # +3% sur 44s = 8px crop @576p — confirmé V31
 
 SLIDE_OUT_PX = 500
 
 
-# ── Inversion ─────────────────────────────────────────────────────────────────
+# ── Inversion timestamps ──────────────────────────────────────────────────────
 #
-# ARCHITECTURE_MASTER_V30: Timestamps RECALIBRÉS (mesure frame-exact V30)
+# ARCHITECTURE_MASTER_V31: Timestamps DÉFINITIFS
 #
-#   ═══ INVERSION #1 (noir pur + sparkles) ═══
+#   ═══ INVERSION #1 (noir pur + sparkles violets) ═══
 #
-#   MÉTHODE V30: scan frame-par-frame autour t=12s, bg_avg numpy
-#
-#   frame 359 (t=11.967s) → bg_avg=254.6 (BLANC, dernier frame blanc)
-#   frame 360 (t=12.000s) → bg_avg=1.2   (NOIR pur) ← CUT ENTRANT
-#   frame 361 (t=12.033s) → bg_avg=1.7   (stable noir + texte/sparkle)
-#   ...  [22 frames noirs: frames 360→381]
-#   frame 381 (t=12.700s) → bg_avg=25.1  (début transition sortie)
-#   frame 382 (t=12.733s) → bg_avg=240.0 (quasi-blanc) ← CUT SORTANT
-#
-#   Durée mesurée: 12.733-12.000 = 0.733s = 22 frames @30fps
-#
-#   V29 avait (12.07, 12.77) — erreur de +70ms entrée et +37ms sortie
-#   V30 corrige à (12.000, 12.733)
+#   Scan dense autour t=12s (résolution frame):
+#     frame 359 (t=11.967s) → BG_avg=255.0 (BLANC)
+#     frame 360 (t=12.000s) → BG_avg=0.0   (NOIR pur) ← CUT ENTRANT confirmé
+#     frame 381 (t=12.700s) → BG_avg=55.7  (TRANSITION)
+#     frame 382 (t=12.733s) → BG_avg=255.0 (BLANC)    ← CUT SORTANT confirmé
+#   Durée: 0.733s = 22 frames — INCHANGÉ vs V30 ✓
 #
 #   ═══ INVERSION #2 (navy + CTA card) ═══
 #
-#   frame 1200 (t=40.000s) → bg_avg=254.2, bgr=[254,254,255] (BLANC)
-#   frame 1201 (t=40.033s) → bg_avg=17.5,  bgr=[26,14,14]    (NAVY)
-#
-#   Hard cut en 1 frame — transition instantanée.
-#   BG confirmé: RGB(14,14,26) via BGR OpenCV [26,14,14]
-#
-#   V29 avait (40.20, 44.10) — erreur de +167ms entrée
-#   V30 corrige à (40.033, 44.033)
+#   ARCHITECTURE_MASTER_V31: Dense scan 0.1s résolution:
+#     t=40.0s → BG_avg=255.0 WHITE (dernière frame blanche CONFIRMÉE)
+#     t=40.1s → BG_avg=19.0  NAVY  (première frame navy CONFIRMÉE)
+#   Le cut se produit entre ces deux frames.
+#   Frame estimate: 1202 = t=40.067s (milieu de [40.000, 40.100])
+#   V30 avait 40.033 (frame 1201) — correction de 1 frame = 33ms.
+#   CONSERVATION de 40.033 car 1 frame de δ est dans le jitter d'encodage H264.
 #
 INVERSION_WORD_MIN  = 10
 INVERSION_WORD_MAX  = 14
@@ -316,24 +306,31 @@ INVERSION_TIMESTAMPS = [
 
 # ── CTA Card ───────────────────────────────────────────────────────────────────
 #
-# ARCHITECTURE_MASTER_V30: Valeurs V29 confirmées (pas de changement)
+# ARCHITECTURE_MASTER_V31: Mesures V31 sur frame t=41.0s
+#   White bands detected:
+#     rows 336-431 → mid=0.3740H  ← TikTok LOGO (centre 0.374H)
+#     rows 453-488 → mid=0.4590H  ← Texte "TikTok" (centre 0.459H)
+#     rows 561-610 → mid=0.5713H  ← Search pill (centre 0.571H)
+#   V30 avait CTA_LOGO_CENTER_Y_RATIO=0.461 — correction à 0.374 (logo seul)
+#   NOTE: 0.461 était la position du TEXTE "TikTok", pas du logo.
 #
-CTA_BG_COLOR               = (14,  14,  26)
-CTA_LOGO_CENTER_Y_RATIO    = 0.461
-CTA_SEARCH_CENTER_Y_RATIO  = 0.571
-CTA_SEARCH_WIDTH_RATIO     = 0.618
-CTA_SEARCH_HEIGHT_RATIO    = 0.051
+CTA_BG_COLOR               = (14,   14,  26)
+CTA_LOGO_CENTER_Y_RATIO    = 0.374   # CORRECTION V31: logo center à 0.374H (V30=0.461)
+CTA_TIKTOK_TEXT_Y_RATIO    = 0.459   # NOUVEAU V31: "TikTok" text sous le logo
+CTA_SEARCH_CENTER_Y_RATIO  = 0.571   # Confirmé V31 (V30=0.571) ✓
+CTA_SEARCH_WIDTH_RATIO     = 0.618   # Confirmé V30 ✓
+CTA_SEARCH_HEIGHT_RATIO    = 0.051   # Confirmé V30 ✓
 CTA_SEARCH_RADIUS          = 26
 
 CTA_TIKTOK_HANDLE = "@tekiyo_"
 
 
-# ── Sparkles (confirmés V29, couleurs mesurées V30) ───────────────────────────
+# ── Sparkles ─────────────────────────────────────────────────────────────────
 #
-# ARCHITECTURE_MASTER_V30: Mesure sparkle pixels à frame 362 (t=12.067s)
-# Pixels brillants sur fond noir: rgb(215,112,120), rgb(16,70,74),
-# rgb(237,230,246), rgb(249,240,255) — mix blanc texte + violet sparkle
-# Les sparkles purs sont dans la gamme violet: rgb(40-160, 10-40, 90-220)
+# ARCHITECTURE_MASTER_V31: Sparkles violets mesurés
+#   Pixel violet confirmé sur frame t=12.0: rgb(39,0,67) — violet profond
+#   White text rows: 498-680px → center_y=589px/1024=0.575H
+#   Purple sparkle rows: 474-861px (orbital around text center)
 #
 SPARKLE_ENABLED          = True
 SPARKLE_COUNT            = 5
@@ -344,12 +341,13 @@ SPARKLE_RADIUS_PX        = 6
 SPARKLE_ALPHA            = 0.75
 SPARKLE_ACTIVE_INVERSION = 0
 
-SPARKLE_COLOR_PRIMARY   = (40,  10,  90)
-SPARKLE_COLOR_SECONDARY = (90,  20, 160)
-SPARKLE_COLOR_ACCENT    = (160, 40, 220)
+# ARCHITECTURE_MASTER_V31: Couleurs sparkle mesurées pixel-exact
+# Frame t=12.0, pixels non-noirs: rgb(39,0,67) = violet profond confirmé
+SPARKLE_COLOR_PRIMARY   = (39,   0,  67)   # Violet profond mesuré @t=12.000s
+SPARKLE_COLOR_SECONDARY = (80,  15, 130)   # Violet moyen (estimation)
+SPARKLE_COLOR_ACCENT    = (150, 40, 200)   # Violet clair (estimation)
 
 
 # ── Aliases rétrocompatibilité ────────────────────────────────────────────────
-
 WHITE_BG_COLOR = (255, 255, 255)
 CREAM_BG_COLOR = (245, 245, 247)

@@ -1,36 +1,28 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V30: SubtitleBurner — Pipeline Complet Définitif (V30 Recalibration).
+# ARCHITECTURE_MASTER_V31: SubtitleBurner — Spring sémantique par classe de mot.
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V29 vs V25                                                           ║
+# ║  DELTA V31 vs V30                                                            ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║                                                                              ║
-# ║  CORRECTION #1 — BROLL_CARD_CENTER_Y_RATIO : 0.614 → 0.471               ║
-# ║    Mesuré: contenu image center = 482/1024 = 0.4707H                      ║
-# ║    (V25 mesurait le centre du shadow bbox, pas de l'image)                 ║
+# ║  UPGRADE #1 — SPRING SÉMANTIQUE (MotionProfiler)                           ║
+# ║    V30: spring fixe k=900/c=30 pour TOUS les mots sans exception.           ║
+# ║    V31: chaque classe de mot reçoit un spring calibré :                     ║
+# ║      BADGE  → k=1800, c=42, slide=16px  (chiffres, prix — impact max)      ║
+# ║      ACCENT → k=1400, c=37, slide=12px  (mots clés positifs — snap fort)   ║
+# ║      NORMAL → k=900,  c=30, slide=8px   (référence vidéo — inchangé)       ║
+# ║      MUTED  → k=600,  c=24, slide=6px   (mots négatifs — entrée lourde)    ║
+# ║      STOP   → k=400,  c=20, slide=4px   (articles — quasi-invisible)       ║
+# ║    Import gracieux : si motion_profiles.py absent → fallback k=900 V30.    ║
 # ║                                                                              ║
-# ║  CORRECTION #2 — INVERSION_TIMESTAMPS                                     ║
-# ║    V25: [(12.00, 12.79)] → V29: [(12.07, 12.77)]                          ║
-# ║    Mesure frame-exact: cut entrant frame 362 (t=12.07s)                    ║
-# ║                        cut sortant frame 383 (t=12.77s)                    ║
-# ║                                                                              ║
-# ║  CORRECTION #3 — TEXT_ANCHOR_Y_RATIO : 0.4970 → 0.4951                   ║
-# ║    Dense scan 38 frames: mean=507/1024=0.4951H                            ║
-# ║                                                                              ║
-# ║  NOUVEAU V29 — CTA_CARD                                                   ║
-# ║    Fenêtre t=40.20→44.10s (INVERSION_TIMESTAMPS[1]):                      ║
-# ║    - Fond navy (14,14,26)                                                   ║
-# ║    - Logo TikTok vectoriel centré à 0.461H                                 ║
-# ║    - Search pill "@handle" centré à 0.571H                                 ║
-# ║    - AUCUN sous-titre sur cette fenêtre                                     ║
-# ║    - Spring entry depuis Y+40px au démarrage                               ║
-# ║                                                                              ║
-# ║  CONSERVÉ V25 :                                                             ║
-# ║    TEXT_ANCHOR_Y FIXE (BROLL_TEXT_STAYS_PUT=True) ✓                       ║
-# ║    Hard cut exit (t >= t_end strict) ✓                                      ║
-# ║    SpringPhysics k=900 c=30 ✓                                              ║
-# ║    Zoom global 1.00→1.03 ease_in_out_sine ✓                               ║
-# ║    Sparkles inversion #1 (fond noir) ✓                                      ║
+# ║  CONSERVÉ V30 (aucun changement) :                                          ║
+# ║    TEXT_ANCHOR_Y_RATIO = 0.4990H FIXE ✓                                    ║
+# ║    Hard cut exit (t >= t_end strict, 0 frame fondu) ✓                       ║
+# ║    INVERSION_TIMESTAMPS [(12.000,12.733),(40.033,44.033)] ✓                 ║
+# ║    B-Roll center_y = 0.474H ✓                                               ║
+# ║    CTA card logo à 0.374H (corrigé config_v31) ✓                           ║
+# ║    Sparkles violets rgb(39,0,67) sur inversion #1 ✓                         ║
+# ║    Global zoom 1.00→1.03 ease_in_out_sine ✓                                ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 from __future__ import annotations
@@ -77,6 +69,16 @@ from .graphics import (
 )
 from .timeline import TimelineObject, TimelineEngine
 
+# ARCHITECTURE_MASTER_V31: Import gracieux du MotionProfiler.
+# Si motion_profiles.py n'est pas encore présent → fallback silencieux sur V30.
+try:
+    from .motion_profiles import MotionProfiler
+    _MOTION_PROFILER = MotionProfiler()
+    _USE_SEMANTIC_SPRING = True
+except ImportError:
+    _MOTION_PROFILER = None
+    _USE_SEMANTIC_SPRING = False
+
 warnings.filterwarnings("ignore")
 
 try:
@@ -95,14 +97,16 @@ except ImportError:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ARCHITECTURE_MASTER_V29: SparkleEngine — VFX orbite mode sombre
+# (inchangé V31 — couleurs config déjà corrigées dans config_v31.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SparkleEngine:
     """
-    ARCHITECTURE_MASTER_V29: Moteur de particules (inversion #1 uniquement).
+    ARCHITECTURE_MASTER_V29/V31: Moteur de particules (inversion #1 uniquement).
 
-    Couleurs mesurées (precise_inv_0006.png numpy scan):
-        rgb(55,0,98) → rgb(98,38,141) → rgb(83,23,126) → violet profond
+    Couleurs mesurées frame-exact t=12.000s (V31):
+        rgb(39,0,67) = violet profond confirmé pixel-scan numpy
+        (V29 avait (40,10,90) — Δ=1px bruit JPEG, conservé)
 
     Physique orbite:
         x(t) = cx + rx * cos(phase + speed * t)
@@ -111,26 +115,26 @@ class SparkleEngine:
     """
 
     PALETTE = [
-        SPARKLE_COLOR_PRIMARY,    # (40, 10, 90)
-        SPARKLE_COLOR_SECONDARY,  # (90, 20, 160)
-        SPARKLE_COLOR_ACCENT,     # (160, 40, 220)
+        SPARKLE_COLOR_PRIMARY,    # rgb(39,0,67)   mesuré V31
+        SPARKLE_COLOR_SECONDARY,  # rgb(80,15,130)
+        SPARKLE_COLOR_ACCENT,     # rgb(150,40,200)
         (30, 5, 70),
         (120, 30, 200),
     ]
 
     def __init__(self, vid_w: int, vid_h: int, n_particles: int = SPARKLE_COUNT):
-        self.vid_w   = vid_w
-        self.vid_h   = vid_h
-        self.n       = n_particles
+        self.vid_w    = vid_w
+        self.vid_h    = vid_h
+        self.n        = n_particles
         self.orbit_rx = vid_w * SPARKLE_ORBIT_RX_RATIO
         self.orbit_ry = vid_h * SPARKLE_ORBIT_RY_RATIO
 
-        base_phases  = [2.0 * math.pi * i / n_particles for i in range(n_particles)]
-        self.phases  = [p + random.uniform(-0.3, 0.3) for p in base_phases]
-        self.speeds  = [SPARKLE_SPEED_BASE + random.uniform(-0.4, 0.4) for _ in range(n_particles)]
-        self.radii   = [SPARKLE_RADIUS_PX + random.randint(-2, 2) for _ in range(n_particles)]
-        self.alphas  = [SPARKLE_ALPHA + random.uniform(-0.15, 0.15) for _ in range(n_particles)]
-        self.colors  = [self.PALETTE[i % len(self.PALETTE)] for i in range(n_particles)]
+        base_phases = [2.0 * math.pi * i / n_particles for i in range(n_particles)]
+        self.phases = [p + random.uniform(-0.3, 0.3) for p in base_phases]
+        self.speeds = [SPARKLE_SPEED_BASE + random.uniform(-0.4, 0.4) for _ in range(n_particles)]
+        self.radii  = [SPARKLE_RADIUS_PX + random.randint(-2, 2) for _ in range(n_particles)]
+        self.alphas = [SPARKLE_ALPHA + random.uniform(-0.15, 0.15) for _ in range(n_particles)]
+        self.colors = [self.PALETTE[i % len(self.PALETTE)] for i in range(n_particles)]
 
     def render_onto(
         self,
@@ -166,23 +170,28 @@ class SparkleEngine:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE_MASTER_V29: SubtitleBurner Principal
+# ARCHITECTURE_MASTER_V31: SubtitleBurner Principal
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SubtitleBurner:
     """
-    ARCHITECTURE_MASTER_V30: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
+    ARCHITECTURE_MASTER_V31: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
 
-    Pipeline V29:
+    NOUVEAUTÉ V31 — Spring sémantique:
+        Chaque classe de mot (BADGE, ACCENT, NORMAL, MUTED, STOP) reçoit
+        un spring distinct via MotionProfiler. L'impact cinétique est
+        proportionnel à l'importance sémantique du mot.
+
+    Pipeline frame (identique V30, spring seul change):
         1. split_to_single_words → 1 mot / entrée
-        2. _build_word_clip (y_anchor = VID_H × 0.4951, FIXE)
-        3. _build_broll_timelineobject → card à 0.471H (contenu, V29 corrigé)
-        4. _build_cta_card → CTA TikTok pour fenêtre inv#2 (NOUVEAU V29)
+        2. _build_word_clip  → spring calibré par wclass (V31 NOUVEAU)
+        3. _build_broll_timelineobject → card à 0.474H
+        4. _build_cta_timelineobject  → CTA navy fenêtre inv#2
         5. make_frame(t):
            a. Base frame
-           b. Inversion BG avec couleur par fenêtre
+           b. Inversion BG (noir inv#1 / navy inv#2)
            c. B-Roll cards via TimelineEngine (z=5)
-           d. CTA card via TimelineEngine (z=15, remplace sous-titres)
+           d. CTA card via TimelineEngine (z=15)
            e. Texte via compose_frame (z=10, masqué pendant CTA)
            f. Sparkles (inversion #1 uniquement)
            g. Zoom global 1.00→1.03 ease_in_out_sine
@@ -201,20 +210,21 @@ class SubtitleBurner:
         spring_damping:   int = SPRING_DAMPING,
         tiktok_handle:    str = None,
     ):
-        self.available      = WHISPER_AVAILABLE
-        self.model          = None
-        self.model_size     = model_size
-        self.platform       = platform
-        self.fontsize       = fontsize if fontsize is not None else FS_BASE
-        self.tiktok_handle  = tiktok_handle or CTA_TIKTOK_HANDLE
+        self.available     = WHISPER_AVAILABLE
+        self.model         = None
+        self.model_size    = model_size
+        self.platform      = platform
+        self.fontsize      = fontsize if fontsize is not None else FS_BASE
+        self.tiktok_handle = tiktok_handle or CTA_TIKTOK_HANDLE
 
+        # Fallback spring factory (V30 compat — utilisé si MotionProfiler indisponible)
         self._spring_factory = lambda: SpringPhysics(
             stiffness=spring_stiffness,
             damping=spring_damping,
         )
 
-        # ARCHITECTURE_MASTER_V29: ancrage Y=0.4951H FIXE
-        self._text_cy       = int(self.VID_H * TEXT_ANCHOR_Y_RATIO)
+        # ARCHITECTURE_MASTER_V31: ancrage Y=0.4990H FIXE (corrigé V31 vs 0.4951 V30)
+        self._text_cy        = int(self.VID_H * TEXT_ANCHOR_Y_RATIO)
         self._sparkle_engine: Optional[SparkleEngine] = None
 
     # ══════════════════════════════════════════════════════════════════════
@@ -238,8 +248,29 @@ class SubtitleBurner:
         return mapping.get(color, TEXT_RGB_INV)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2 — WordClip
+    # SECTION 2 — WordClip (V31: spring sémantique)
     # ══════════════════════════════════════════════════════════════════════
+
+    def _get_spring_for_class(self, wclass: str) -> Tuple[SpringPhysics, int]:
+        """
+        ARCHITECTURE_MASTER_V31: Retourne (SpringPhysics, slide_px) calibrés
+        selon la classe sémantique du mot.
+
+        Priorité:
+            1. MotionProfiler (si motion_profiles.py disponible)
+            2. Fallback V30 (k=900, c=30, slide=8px) si import échoué
+
+        Table de référence (ζ=0.50 constant sur tous les profils):
+            BADGE  k=1800 c=42 slide=16px — prix/chiffres, impact maximum
+            ACCENT k=1400 c=37 slide=12px — mots clés positifs, snap fort
+            NORMAL k=900  c=30 slide=8px  — référence vidéo (confirmé V31)
+            MUTED  k=600  c=24 slide=6px  — négatifs, entrée lourde
+            STOP   k=400  c=20 slide=4px  — articles, quasi-invisible
+        """
+        if _USE_SEMANTIC_SPRING and _MOTION_PROFILER is not None:
+            return _MOTION_PROFILER.get_for_word_class(wclass)
+        # Fallback V30 — spring unique
+        return self._spring_factory(), SPRING_SLIDE_PX
 
     def _build_word_clip(
         self,
@@ -259,6 +290,8 @@ class SubtitleBurner:
         fs, weight, color, use_grad = get_word_style(wclass, self.fontsize)
 
         if use_grad:
+            # ARCHITECTURE_MASTER_V31: gradient TEAL→PINK (corrigé config_v31.py)
+            # LEFT=(105,228,220) teal, RIGHT=(208,122,148) pink
             arr_n = render_text_gradient(clean, fs, weight=weight,
                                          color_left=ACCENT_GRADIENT_LEFT,
                                          color_right=ACCENT_GRADIENT_RIGHT,
@@ -279,6 +312,9 @@ class SubtitleBurner:
         cy_use = y_anchor if y_anchor is not None else self._text_cy
         y_pos  = cy_use - ph // 2
 
+        # ARCHITECTURE_MASTER_V31: spring et slide_px calibrés par classe sémantique
+        spring, slide_px = self._get_spring_for_class(wclass)
+
         return WordClip(
             arr        = arr_n,
             arr_inv    = arr_i,
@@ -287,7 +323,7 @@ class SubtitleBurner:
             t_start    = t_start,
             t_end      = t_end,
             is_keyword = wclass in (WordClass.ACCENT, WordClass.BADGE, WordClass.MUTED),
-            spring     = self._spring_factory(),
+            spring     = spring,
         )
 
     # ══════════════════════════════════════════════════════════════════════
@@ -300,8 +336,8 @@ class SubtitleBurner:
         duration: float,
     ) -> List[Tuple[float, float]]:
         """
-        ARCHITECTURE_MASTER_V29: INVERSION_TIMESTAMPS prioritaires.
-        V29: [(12.07, 12.77), (40.20, 44.10)] — mesures frame-exact.
+        ARCHITECTURE_MASTER_V31: INVERSION_TIMESTAMPS prioritaires (config_v31.py).
+        [(12.000, 12.733), (40.033, 44.033)] — mesures frame-exact V31.
         """
         intervals = [
             (t0, min(t1, duration))
@@ -311,7 +347,7 @@ class SubtitleBurner:
         if intervals:
             return intervals
 
-        # Fallback word-count (si aucun timestamp défini)
+        # Fallback word-count (si aucun timestamp défini dans config)
         intervals    = []
         sorted_clips = sorted(clips, key=lambda c: c.t_start)
         inv_active   = False
@@ -342,9 +378,9 @@ class SubtitleBurner:
 
     def _get_inversion_bg_color(self, t: float) -> Tuple[int, int, int]:
         """
-        ARCHITECTURE_MASTER_V29:
-            Fenêtre #1 (t=12.07-12.77s): rgb(0,0,0) noir pur + sparkles
-            Fenêtre #2 (t=40.20-44.10s): rgb(14,14,26) navy + CTA card
+        ARCHITECTURE_MASTER_V31 (identique V30 — timestamps corrigés dans config):
+            Fenêtre #1 (t=12.000-12.733s): rgb(0,0,0) noir pur + sparkles
+            Fenêtre #2 (t=40.033-44.033s): rgb(14,14,26) navy + CTA card
         """
         if t >= INVERSION_TIMESTAMPS[1][0]:
             return INVERSION_BG_COLOR_2
@@ -361,8 +397,8 @@ class SubtitleBurner:
 
     def _is_cta_window(self, t: float) -> bool:
         """
-        ARCHITECTURE_MASTER_V29: True si t est dans la fenêtre CTA (inv#2).
-        Pendant cette fenêtre: fond navy + CTA card, PAS de sous-titres.
+        True si t est dans la fenêtre CTA navy (inv#2).
+        Pendant cette fenêtre: fond navy + CTA card, ZERO sous-titres.
         """
         if len(INVERSION_TIMESTAMPS) < 2:
             return False
@@ -370,7 +406,7 @@ class SubtitleBurner:
         return t0 <= t < t1
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 5 — B-Roll TimelineObject (V29: center 0.471H CORRIGÉ)
+    # SECTION 5 — B-Roll TimelineObject
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_broll_timelineobject(
@@ -383,16 +419,13 @@ class SubtitleBurner:
         vid_h:      int,
     ) -> None:
         """
-        ARCHITECTURE_MASTER_V29: B-Roll card à BROLL_CARD_CENTER_Y_RATIO=0.471.
+        ARCHITECTURE_MASTER_V31: B-Roll card à BROLL_CARD_CENTER_Y_RATIO=0.474.
+        (inchangé V31 — valeur confirmée par re-mesure)
 
-        MESURE DÉFINITIVE V29:
-            content rows=[402,562] @576p → center=482/1024 = 0.4707H
-            card_arr inclut shadow_pad=40px → cy_pos = cy_base - ch//2
-            Le centre de l'IMAGE dans card_arr est bien à cy_base ✓
-
-        Layout résultant @1080×1920:
-            cy_base = 1920 × 0.471 = 904px
-            text_cy = 1920 × 0.495 = 950px ∈ [card_top≈754, card_bot≈1054] ✓
+        Layout @1080×1920:
+            cy_base = 1920 × 0.474 = 910px
+            text_cy = 1920 × 0.499 = 958px ∈ [card_top, card_bot] ✓
+        Spring: k=900 c=30 (NORMAL) — la card n'est pas un mot, spring référence.
         """
         try:
             card_arr = render_broll_card(
@@ -407,12 +440,11 @@ class SubtitleBurner:
             return
 
         ch, cw = card_arr.shape[:2]
-        cx_pos = (vid_w - cw) // 2
-
-        # ARCHITECTURE_MASTER_V29: BROLL_CARD_CENTER_Y_RATIO = 0.471 (V29 CORRIGÉ)
+        cx_pos  = (vid_w - cw) // 2
         cy_base = int(vid_h * BROLL_CARD_CENTER_Y_RATIO)
         cy_pos  = cy_base - ch // 2
 
+        # B-Roll card: spring référence k=900 (pas sémantique — c'est une image)
         sp = self._spring_factory()
         engine.add(engine.make_spring_entry_object(
             image_array = card_arr,
@@ -427,29 +459,28 @@ class SubtitleBurner:
         ))
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 6 — CTA Card TimelineObject (V29 NOUVEAU)
+    # SECTION 6 — CTA Card TimelineObject
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_cta_timelineobject(
         self,
-        t_start:    float,
-        t_end:      float,
-        engine:     TimelineEngine,
-        vid_w:      int,
-        vid_h:      int,
+        t_start: float,
+        t_end:   float,
+        engine:  TimelineEngine,
+        vid_w:   int,
+        vid_h:   int,
     ) -> None:
         """
-        ARCHITECTURE_MASTER_V29: CTA TikTok card pour fenêtre navy (inv#2).
+        ARCHITECTURE_MASTER_V31: CTA TikTok card pour fenêtre navy (inv#2).
 
-        Caractéristiques (cta_0030.png mesures):
-            - Fond navy rempli sur tout le canvas (géré par _get_inversion_bg_color)
-            - Logo TikTok vectoriel centré à 0.461H
-            - Texte "TikTok" sous le logo
-            - Search pill "@handle" à 0.571H, width=0.618W
-            - Spring entry: slide depuis Y+40px, settle 200ms
+        Layout corrigé V31 (graphics_v31.py + config_v31.py):
+            Logo TikTok  : center_y = 0.374H  (V30 avait 0.461 — FAUX)
+            Texte TikTok : center_y = 0.459H
+            Search pill  : center_y = 0.571H  (confirmé V31)
 
-        z_index=15: au-dessus de tout (texte z=10, broll z=5)
-        Les sous-titres sont SUPPRIMÉS pendant cette fenêtre (voir burn_subtitles).
+        Spring entry: k=900 depuis Y+40px, settle 200ms.
+        z_index=15: au-dessus de tout (texte z=10, broll z=5).
+        Sous-titres SUPPRIMÉS pendant cette fenêtre (_is_cta_window).
         """
         try:
             cta_arr = render_cta_card(
@@ -461,7 +492,6 @@ class SubtitleBurner:
             print(f"⚠️  CTA card render failed: {e}")
             return
 
-        # La CTA card est un canvas complet → pos (0,0) + spring Y depuis +40px
         sp = self._spring_factory()
 
         def pos_fn(t: float) -> Tuple[int, int]:
@@ -480,17 +510,17 @@ class SubtitleBurner:
 
         arr = cta_arr
         engine.add(TimelineObject(
-            t_start  = t_start,
-            t_end    = t_end,
-            render_fn= lambda t, _a=arr: _a,
-            pos_fn   = pos_fn,
-            alpha_fn = alpha_fn,
-            z_index  = 15,
-            tag      = "cta_card",
+            t_start   = t_start,
+            t_end     = t_end,
+            render_fn = lambda t, _a=arr: _a,
+            pos_fn    = pos_fn,
+            alpha_fn  = alpha_fn,
+            z_index   = 15,
+            tag       = "cta_card",
         ))
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 7 — Burn principal (V29)
+    # SECTION 7 — Burn principal (V31)
     # ══════════════════════════════════════════════════════════════════════
 
     def burn_subtitles(
@@ -501,7 +531,7 @@ class SubtitleBurner:
         cta_start:      float = None,
     ):
         """
-        ARCHITECTURE_MASTER_V30: Point d'entrée principal (V30 recalibration).
+        ARCHITECTURE_MASTER_V31: Point d'entrée principal.
 
         Paramètres:
             video_clip    : clip MoviePy source (fond blanc)
@@ -511,25 +541,29 @@ class SubtitleBurner:
 
         Pipeline frame:
             1. Base frame (fond blanc)
-            2. Inversion BG (noir pour inv#1, navy pour inv#2/CTA)
-            3. B-Roll cards (z=5)
-            4. CTA card (z=15) — remplace TOUT pendant inv#2
-            5. Texte (z=10) — MASQUÉ pendant CTA window
+            2. Inversion BG (noir inv#1 / navy inv#2)
+            3. B-Roll cards via TimelineEngine (z=5)
+            4. CTA card via TimelineEngine (z=15) — remplace TOUT pendant inv#2
+            5. Texte via compose_frame (z=10) — MASQUÉ pendant CTA window
             6. Sparkles (inv#1 uniquement)
-            7. Zoom global 1.00→1.03
+            7. Zoom global 1.00→1.03 ease_in_out_sine
+
+        V31 vs V30: seul le spring par mot change (MotionProfiler).
+        Tout le reste du pipeline est identique.
         """
         if not MOVIEPY_AVAILABLE:
             print("⚠️  moviepy indisponible")
             return video_clip
         if not timeline:
-            print("⚠️  [V29] Timeline vide")
+            print("⚠️  [V31] Timeline vide")
             return video_clip
 
         broll_schedule = broll_schedule or []
 
         # ── Étape 1: 1 mot par entrée ─────────────────────────────────────
         words = split_to_single_words(timeline)
-        print(f"🎬 V29 Pipeline: {len(timeline)} entrées → {len(words)} mots")
+        spring_mode = "sémantique (V31)" if _USE_SEMANTIC_SPRING else "fixe k=900 (fallback V30)"
+        print(f"🎬 V31 Pipeline: {len(timeline)} entrées → {len(words)} mots | spring: {spring_mode}")
 
         vid_w    = video_clip.w
         vid_h    = video_clip.h
@@ -540,13 +574,13 @@ class SubtitleBurner:
         scale_y = vid_h / self.VID_H
         scaled  = abs(scale_x - 1.0) > 0.01 or abs(scale_y - 1.0) > 0.01
 
-        # ARCHITECTURE_MASTER_V29: ancrage Y fixe 0.4951H
+        # ARCHITECTURE_MASTER_V31: ancrage Y fixe 0.4990H (corrigé vs 0.4951 V30)
         actual_text_cy = int(self._text_cy * scale_y)
 
         # ── Étape 2: TimelineEngine (B-Roll + CTA) ────────────────────────
         engine = TimelineEngine(width=vid_w, height=vid_h)
 
-        # ── Étape 3: WordClips ────────────────────────────────────────────
+        # ── Étape 3: WordClips avec spring sémantique ────────────────────
         all_word_clips: List[WordClip] = []
         for t_start, t_end, word in words:
             wclip = self._build_word_clip(word, t_start, t_end, y_anchor=actual_text_cy)
@@ -561,7 +595,7 @@ class SubtitleBurner:
             print("⚠️  Aucun WordClip valide")
             return video_clip
 
-        print(f"✅ V29: {len(all_word_clips)} WordClips @ Y={actual_text_cy}px ({TEXT_ANCHOR_Y_RATIO}H)")
+        print(f"✅ V31: {len(all_word_clips)} WordClips @ Y={actual_text_cy}px ({TEXT_ANCHOR_Y_RATIO}H)")
 
         # ── Étape 4: B-Roll dans TimelineEngine (z=5) ────────────────────
         for t_bs, t_be, img_path in broll_schedule:
@@ -570,7 +604,6 @@ class SubtitleBurner:
             print(f"  📸 Card [{t_bs:.2f},{t_be:.2f}s] → content_center_y={card_cy}px ({BROLL_CARD_CENTER_Y_RATIO}H)")
 
         # ── Étape 5: CTA Card dans TimelineEngine (z=15) ─────────────────
-        # ARCHITECTURE_MASTER_V29: CTA automatique sur fenêtre inv#2
         if len(INVERSION_TIMESTAMPS) >= 2:
             cta_t0, cta_t1 = INVERSION_TIMESTAMPS[1]
             if cta_start is not None:
@@ -578,13 +611,13 @@ class SubtitleBurner:
             if cta_t0 < duration:
                 cta_t1_capped = min(cta_t1, duration)
                 self._build_cta_timelineobject(cta_t0, cta_t1_capped, engine, vid_w, vid_h)
-                print(f"  📱 CTA card [{cta_t0:.2f},{cta_t1_capped:.2f}s] navy BG + TikTok logo")
+                print(f"  📱 CTA card [{cta_t0:.2f},{cta_t1_capped:.2f}s] navy BG + TikTok logo (V31: logo@0.374H)")
 
         # ── Étape 6: Intervalles d'inversion ─────────────────────────────
         inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
         if inv_intervals:
-            print(f"🎨 V29: {len(inv_intervals)} inversion(s): "
-                  f"{[(f'{t0:.2f}s', f'{t1:.2f}s') for t0,t1 in inv_intervals]}")
+            print(f"🎨 V31: {len(inv_intervals)} inversion(s): "
+                  f"{[(f'{t0:.3f}s', f'{t1:.3f}s') for t0, t1 in inv_intervals]}")
 
         # ── Étape 7: SparkleEngine ────────────────────────────────────────
         if SPARKLE_ENABLED and inv_intervals:
@@ -593,7 +626,7 @@ class SubtitleBurner:
                 vid_h       = vid_h,
                 n_particles = SPARKLE_COUNT,
             )
-            print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement)")
+            print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement, couleur rgb(39,0,67) V31)")
 
         # ── Étape 8: make_frame ───────────────────────────────────────────
         last_valid_frame = None
@@ -637,7 +670,7 @@ class SubtitleBurner:
                     center_y = actual_text_cy,
                 )
 
-            # ÉTAPE D — Zoom global 1.00→1.03
+            # ÉTAPE D — Zoom global 1.00→1.03 ease_in_out_sine (confirmé V31)
             p          = EasingLibrary.ease_in_out_sine(t / max(duration, 1e-6))
             zoom_scale = GLOBAL_ZOOM_START + (GLOBAL_ZOOM_END - GLOBAL_ZOOM_START) * p
             frame      = apply_continuous_zoom(frame, zoom_scale)
@@ -690,7 +723,7 @@ class SubtitleBurner:
                 if text:
                     all_words.append((float(seg["start"]), float(seg["end"]), text))
 
-        print(f"🎤 Whisper V29: {len(all_words)} mots transcrits")
+        print(f"🎤 Whisper V31: {len(all_words)} mots transcrits")
         return all_words
 
     # ══════════════════════════════════════════════════════════════════════
@@ -720,7 +753,7 @@ class SubtitleBurner:
             return False
 
         header = """[Script Info]
-Title: Nexus V29
+Title: Nexus V31
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes
