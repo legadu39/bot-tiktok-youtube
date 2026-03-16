@@ -6,6 +6,12 @@
 # PROD_READY_V31: Zéro Silent Failure, Optimisation extrême du rendu, Timing infaillible.
 # MOTION_ENGINE_V32: 4 piliers d'optimisation motion design — word-by-word, spring,
 #   zoom perpétuel, anticipation audio, hiérarchie typographique, b-roll validation.
+# PIXEL_PERFECT_INTEGRATED:
+#   FIX 1 — _validate_script_density(): rejet des scripts fantômes (< 8 scènes / 60 mots).
+#   FIX 2 — _step_1_ideation(): appelle la validation avant de retourner le script.
+#   FIX 3 — _step_3_audio(): durée silence = max(30s, word_count / 2.5) au lieu de len(text)/13.
+#   FIX 4 — _step_2_visuals(): génère des fonds premium si vault vide (0 B-Roll matches).
+#   FIX 5 — __init__: SpringLUT.warm_up() au démarrage pour éviter le cold-start.
 
 import asyncio
 import sys
@@ -52,46 +58,30 @@ from tools.burner import SubtitleBurner
 from fallback import FallbackProvider
 
 from tools.config import FS_BASE
+from tools.physics import SpringLUT   # PIXEL_PERFECT_INTEGRATED
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MOTION_ENGINE_V32: Constantes globales du moteur de mouvement
 # ─────────────────────────────────────────────────────────────────────────────
 
-# MOTION_ENGINE_V32: PILIER 4 — Anticipation audio
-# Le texte apparaît 40ms avant le son pour une sensation de fluidité premium.
-# Mesuré sur la vidéo référence : gap moyen 255ms / 15 cuts = synchronisation
-# légèrement en avance sur la voix. Valeur sûre : -0.040s.
 AUDIO_ANTICIPATION_OFFSET: float = -0.040
-
-# MOTION_ENGINE_V32: PILIER 2 — Caméra virtuelle perpétuelle
-# Confirmé pixel-exact : corners=254.3 = crop 8px @576p = zoom +3% sur 44s.
 VIRTUAL_CAMERA_ZOOM_START: float = 1.000
 VIRTUAL_CAMERA_ZOOM_END:   float = 1.030
-
-# MOTION_ENGINE_V32: PILIER 1 — Spring overshoot
-# Spring physics : k=900, c=30, ζ=0.50, peak overshoot +15% à t=120ms.
-# Confirmé par analyse dense 38 frames @30fps.
 SPRING_K_REFERENCE: float = 900.0
 SPRING_C_REFERENCE: float = 30.0
-
-# MOTION_ENGINE_V32: Seuil de détection timeline scène vs mot-par-mot
-# Si les entrées timeline ont en moyenne > SCENE_DETECTION_WORD_THRESHOLD mots,
-# on considère que la transcription Whisper a échoué → fallback synthétique.
 SCENE_DETECTION_WORD_THRESHOLD: int = 3
-
-# MOTION_ENGINE_V32: PILIER 3 — Hiérarchie typographique
-# Ratio cap-height mesuré référence : normal=20px, accent=27px, large=58px @576p
-# Ratios calculés : normal=1.00, accent=1.35, badge=2.90 (normalisé sur FS_BASE=70)
 TYPO_SCALE_NORMAL: float = 1.00
-TYPO_SCALE_ACCENT: float = 1.45   # Légèrement au-dessus de 1.35 mesuré (antialiasing sub-pixel)
+TYPO_SCALE_ACCENT: float = 1.45
 TYPO_SCALE_BADGE:  float = 1.25
 TYPO_SCALE_MUTED:  float = 1.10
 TYPO_SCALE_STOP:   float = 0.85
-
-# MOTION_ENGINE_V32: B-Roll — ratio max de couverture du canvas accepté
-# Au-delà de 70%, l'image B-Roll écrase le fond blanc → rejetée.
 BROLL_MAX_COVERAGE_RATIO: float = 0.70
+
+# PIXEL_PERFECT_INTEGRATED: Seuils de validation script
+SCRIPT_MIN_SCENES: int = 8       # Minimum de scènes réelles pour une vidéo 40-60s
+SCRIPT_MIN_WORDS:  int = 60      # Minimum de mots réels (cible 100-130)
+SCRIPT_TTS_WORDS_PER_SEC: float = 2.5   # Vitesse de lecture TTS @speed=1.0
 
 
 class SemanticException(Exception):
@@ -120,6 +110,10 @@ _GHOST_TEXT_BLACKLIST = frozenset([
     "[titre accrocheur",
     "schéma-scene",
     "exemple de structure",
+    "ton premier vrai mot",        # PIXEL_PERFECT_INTEGRATED: ajout pattern V34
+    "ton vrai premier mot",        # PIXEL_PERFECT_INTEGRATED
+    "vrai contenu sur",            # PIXEL_PERFECT_INTEGRATED
+    "placeholder",                 # PIXEL_PERFECT_INTEGRATED
 ])
 
 
@@ -144,15 +138,10 @@ def _sanitize_visual_prompt(raw_prompt: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MOTION_ENGINE_V32: PILIER 1 — Easing & Spring (fonctions standalone)
+# MOTION_ENGINE_V32: PILIER 1 — Easing & Spring
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ease_out_back(p: float, overshoot: float = 1.70158) -> float:
-    """
-    MOTION_ENGINE_V32: Courbe ease_out_back — dépasse la cible puis rebondit.
-    Utilisée pour l'apparition des mots : scale 0% → 110% → 100% en ~200ms.
-    overshoot=1.70 → discret (+10%) | overshoot=2.5 → prononcé (+20%)
-    """
     p = max(0.0, min(1.0, p))
     c1 = overshoot
     c3 = c1 + 1.0
@@ -160,120 +149,73 @@ def _ease_out_back(p: float, overshoot: float = 1.70158) -> float:
 
 
 def _ease_in_out_sine(p: float) -> float:
-    """
-    MOTION_ENGINE_V32: PILIER 2 — Zoom caméra virtuelle.
-    Sinusoïdale imperceptible frame-à-frame, visible sur la durée complète.
-    """
     p = max(0.0, min(1.0, p))
     return -(math.cos(math.pi * p) - 1.0) / 2.0
 
 
 def _spring_value(t: float, k: float = SPRING_K_REFERENCE, c: float = SPRING_C_REFERENCE) -> float:
-    """
-    MOTION_ENGINE_V32: Oscillateur harmonique amorti — formule analytique exacte.
-    ζ = c/(2√k) = 30/(2×30) = 0.500 → sous-amorti → overshoot +15% confirmé.
-    Peak: t=120ms (frame 4 @30fps) → x=1.153
-    Settle 98%: t=200ms (frame 6 @30fps) ✓
-    """
     t = max(0.0, t)
     omega0 = math.sqrt(max(k, 1e-6))
     zeta   = c / (2.0 * omega0)
-    if zeta < 1.0 - 1e-6:   # sous-amorti (notre cas)
+    if zeta < 1.0 - 1e-6:
         omega_d    = omega0 * math.sqrt(max(1.0 - zeta**2, 1e-12))
         sin_coeff  = zeta / math.sqrt(max(1.0 - zeta**2, 1e-12))
         env        = math.exp(-zeta * omega0 * t)
         return 1.0 - env * (math.cos(omega_d * t) + sin_coeff * math.sin(omega_d * t))
-    elif zeta > 1.0 + 1e-6:  # sur-amorti
+    elif zeta > 1.0 + 1e-6:
         sq = math.sqrt(max(zeta**2 - 1.0, 1e-12))
         r1 = omega0 * (-zeta + sq)
         r2 = omega0 * (-zeta - sq)
         d  = r2 - r1 if abs(r2 - r1) > 1e-12 else 1e-12
         return 1.0 - (r2 * math.exp(r1 * t) - r1 * math.exp(r2 * t)) / d
-    else:                     # critique
+    else:
         env = math.exp(-omega0 * t)
         return 1.0 - env * (1.0 + omega0 * t)
 
 
 def _spring_clamped(t: float, k: float = SPRING_K_REFERENCE, c: float = SPRING_C_REFERENCE) -> float:
-    """Alpha [0,1] clampé — pour l'opacité, sans overshoot."""
     return max(0.0, min(1.0, _spring_value(t, k, c)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MOTION_ENGINE_V32: PILIER 4 — Timeline processing (anticipation + word-by-word)
+# MOTION_ENGINE_V32: PILIER 4 — Timeline processing
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_synthetic_word_timeline(
     scene_timeline: List[Tuple[float, float, str]],
 ) -> List[Tuple[float, float, str]]:
-    """
-    MOTION_ENGINE_V32: ROOT CAUSE FIX (+3 points de réalisme).
-
-    Quand Whisper échoue (TTS test mode → silence → 0 mots transcrits),
-    la timeline reste au niveau SCÈNE (phrases entières). Ce fallback
-    synthétise une timeline mot-par-mot en distribuant le temps
-    proportionnellement au nombre de caractères de chaque mot.
-
-    AVANT (V31) : timeline = [(0.0, 3.5, "Le secret du trading"), ...]
-        → classify_word reçoit une phrase → toujours NORMAL → pas de gradient
-        → spring unique k=900 → hiérarchie plate → audit = 3.0/10
-
-    APRÈS (V32) : timeline = [(0.0, 0.3, "Le"), (0.3, 0.7, "secret"), ...]
-        → classify_word correct → gradient sur "secret" → spring BADGE sur chiffres
-        → hiérarchie typographique activée → audit estimé +3 points
-
-    Distribution temporelle : proportionnelle aux caractères (sans ponctuation).
-    Les marqueurs [PAUSE], [BOLD], [BADGE] sont préservés avec le mot adjacent.
-    """
     result = []
     for t_start, t_end, text in scene_timeline:
         clean = re.sub(r'\[.*?\]', '', text).strip()
         words = clean.split() if clean else []
-
         if not words:
             continue
-
-        # Texte court = probablement déjà mot-par-mot → pas de découpage
         if len(words) == 1:
             result.append((t_start, t_end, words[0]))
             continue
-
         duration = max(t_end - t_start, 0.05)
 
-        # Poids proportionnel aux caractères (hors ponctuation finale)
         def char_weight(w: str) -> float:
             stripped = w.rstrip(".,!?:;\"'«»")
             return max(1.0, float(len(stripped)))
 
         total_chars = sum(char_weight(w) for w in words)
         cursor = t_start
-
         for i, word in enumerate(words):
-            ratio  = char_weight(word) / max(total_chars, 1.0)
-            w_dur  = duration * ratio
-            w_end  = t_start + (t_end - t_start) * sum(
+            w_end = t_start + (t_end - t_start) * sum(
                 char_weight(words[j]) for j in range(i + 1)
             ) / max(total_chars, 1.0)
             w_start = cursor
             cursor  = w_end
-
-            # Correction du dernier mot pour aligner exactement sur t_end
             if i == len(words) - 1:
                 cursor = t_end
-
             result.append((w_start, min(cursor, t_end), word))
-
     return result
 
 
 def _is_word_level_timeline(timeline: List[Tuple[float, float, str]]) -> bool:
-    """
-    MOTION_ENGINE_V32: Détecte si la timeline est déjà au niveau mot-par-mot.
-    Heuristique : si les 10 premières entrées ont en moyenne > THRESHOLD mots,
-    c'est une timeline scène → besoin du fallback synthétique.
-    """
     if not timeline:
-        return True  # Vide = rien à faire
+        return True
     sample = timeline[:min(10, len(timeline))]
     avg_words = sum(len(t[2].split()) for t in sample) / len(sample)
     return avg_words <= SCENE_DETECTION_WORD_THRESHOLD
@@ -283,24 +225,11 @@ def _apply_anticipation_offset(
     timeline: List[Tuple[float, float, str]],
     offset:   float = AUDIO_ANTICIPATION_OFFSET,
 ) -> List[Tuple[float, float, str]]:
-    """
-    MOTION_ENGINE_V32: PILIER 4 — Anticipation audio.
-
-    Décale tous les timestamps d'apparition de `offset` secondes.
-    offset=-0.040 → le texte pop 40ms avant le son correspondant.
-
-    Contraintes de sécurité :
-    - Le t_start ne descend jamais en dessous de 0.0
-    - La durée minimale d'un mot est préservée à 50ms
-    - Le hard cut (t_end) n'est pas décalé → le mot reste visible le bon temps
-    """
     if not timeline or abs(offset) < 1e-6:
         return timeline
-
     adjusted = []
     for t_start, t_end, word in timeline:
         new_start = max(0.0, t_start + offset)
-        # Garantir durée minimale
         if t_end - new_start < 0.050:
             new_start = max(0.0, t_end - 0.050)
         adjusted.append((new_start, t_end, word))
@@ -310,29 +239,15 @@ def _apply_anticipation_offset(
 def _close_word_gaps(
     timeline: List[Tuple[float, float, str]],
 ) -> List[Tuple[float, float, str]]:
-    """
-    MOTION_ENGINE_V32: Fermeture des gaps entre mots consécutifs.
-
-    Problème mesuré en V31 : gaps de 200ms entre certains mots (6 frames noires).
-    Cause : la durée Whisper de chaque mot ne couvre pas jusqu'au mot suivant.
-    Fix : étendre t_end de chaque mot jusqu'au t_start du suivant.
-
-    Seuil : seulement les gaps > 1ms sont comblés (les gaps de 0ms sont normaux
-    et indiquent un hard cut intentionnel sur un [PAUSE]).
-    """
     if len(timeline) < 2:
         return timeline
-
     result = list(timeline)
     for i in range(len(result) - 1):
         t_s, t_e, word = result[i]
         next_start      = result[i + 1][0]
         gap_ms          = (next_start - t_e) * 1000.0
-
         if gap_ms > 1.0 and "[PAUSE]" not in word.upper():
-            # Combler le gap : étendre ce mot jusqu'au début du suivant
             result[i] = (t_s, next_start, word)
-
     return result
 
 
@@ -392,10 +307,15 @@ class NexusBrain:
         self.signals_dir   = Path("./temp_signals")
         self.signals_dir.mkdir(exist_ok=True)
 
+        # PIXEL_PERFECT_INTEGRATED: Pré-chauffe la SpringLUT au démarrage.
+        # Évite le cold-start (calcul numpy la première fois) pendant le rendu.
+        SpringLUT.warm_up(fps=30)
+
         jlog("info", msg=f"Nexus Brain V32 initialized (MOTION_ENGINE_V32)")
         jlog("info", msg=f"  Anticipation offset : {AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms")
         jlog("info", msg=f"  Zoom caméra virtuelle : {VIRTUAL_CAMERA_ZOOM_START:.3f}→{VIRTUAL_CAMERA_ZOOM_END:.3f}")
         jlog("info", msg=f"  Spring k={SPRING_K_REFERENCE:.0f} c={SPRING_C_REFERENCE:.0f} ζ=0.50")
+        jlog("info", msg=f"  SpringLUT warmed up — {len(SpringLUT._cache)} profils en cache")
 
     # ─────────────────────────────────────────────────────────────────────
     # INTELLIGENCE DÉLÉGUÉE & MÉMOIRE TRAUMATIQUE
@@ -464,7 +384,9 @@ class NexusBrain:
                     stderr=asyncio.subprocess.PIPE
                 )
 
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout_val)
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout_val
+                )
                 stdout = stdout_bytes.decode('utf-8', errors='replace')
                 stderr = stderr_bytes.decode('utf-8', errors='replace')
 
@@ -519,12 +441,10 @@ class NexusBrain:
             files = list(self.buffer_dir.glob("*.json"))
             if not files:
                 return None
-
             valid_files = [f for f in files if os.path.getmtime(f) >= start_time - 1.0]
             if not valid_files:
                 jlog("warning", msg="Fichiers buffer ignorés (fantômes d'une session précédente).")
                 return None
-
             latest_file = max(valid_files, key=os.path.getmtime)
             jlog("success", msg=f"Payload valide récupéré: {latest_file.name}")
             with open(latest_file, "r", encoding="utf-8") as f:
@@ -542,7 +462,6 @@ class NexusBrain:
     def _get_smart_sleep_duration(self) -> int:
         now              = datetime.now()
         current_date_str = now.strftime("%Y-%m-%d")
-
         if self.last_run_date == current_date_str:
             tomorrow_8am    = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
             seconds_to_wait = (tomorrow_8am - now).total_seconds()
@@ -550,19 +469,16 @@ class NexusBrain:
             total_sleep     = max(60, int(seconds_to_wait + jitter))
             jlog("pacer", msg=f"Quota done. Smart Sleep: réveil dans {total_sleep/3600:.2f}h")
             return total_sleep
-
         if 2 <= now.hour < 6:
             target_time = now.replace(hour=6, minute=0, second=0)
             seconds     = int((target_time - now).total_seconds())
             jlog("pacer", msg=f"Night Mode. Sleep {seconds/3600:.2f}h")
             return max(60, seconds)
-
         return 60
 
     def _get_smart_theme(self) -> str:
         recent_topics = self._get_recent_topics(limit=10)
         counts = {"mindset": 0, "technique": 0, "propfirm": 0}
-
         for t in recent_topics:
             t_low = t.lower()
             if any(k in t_low for k in ["mindset","discipline","psychologie","motivation","secret","perds"]):
@@ -571,9 +487,7 @@ class NexusBrain:
                 counts["propfirm"] += 1
             else:
                 counts["technique"] += 1
-
         total = sum(counts.values())
-
         if counts["propfirm"] == 0 and total >= 4:
             return "Vente & Conversion PropFirm (Preuves de gains/Payout)"
         if counts["mindset"] < 2:
@@ -597,17 +511,14 @@ class NexusBrain:
                     if k in name_lower and k != category:
                         tags.append(k)
                 detected_category = category.capitalize()
-
         now      = datetime.now()
         day_tags = {0:"#NewWeek",4:"#FridayFeeling",5:"#WeekendVibes",6:"#SundayReset"}
         if now.weekday() in day_tags:
             tags.append(day_tags[now.weekday()])
-
         clean_name = Path(filename).stem.replace("_"," ").replace("-"," ").title()
         if len(clean_name) < 10:
             clean_name = f"{clean_name} : Le Secret Dévoilé"
         title = f"{clean_name} #{detected_category}"
-
         return {
             "title":          title,
             "description":    f"Découvrez {clean_name}.\n\nABONNE-TOI pour plus de {detected_category}.",
@@ -693,6 +604,60 @@ class NexusBrain:
             return None
 
     # ─────────────────────────────────────────────────────────────────────
+    # PIXEL_PERFECT_INTEGRATED: Validation densité script
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _validate_script_density(self, script_data: Dict) -> bool:
+        """
+        PIXEL_PERFECT_INTEGRATED: Guard de densité script.
+
+        Un script avec moins de SCRIPT_MIN_SCENES scènes ou SCRIPT_MIN_WORDS mots
+        est considéré comme un échec de génération (ghost text non détecté, ou
+        LLM ayant retourné une réponse tronquée).
+
+        Cause mesurée : 3 scènes sur 4 rejetées comme ghost → 1 scène réelle
+        → 42 mots synthétiques → vidéo avec plages blanches sur 44s.
+
+        Seuils :
+          SCRIPT_MIN_SCENES = 8  (vidéo 40-60s à ~2.5 mots/scène = min 80 mots)
+          SCRIPT_MIN_WORDS  = 60 (cible 100-130 mots; 60 = dégradé acceptable)
+        """
+        if not script_data or "scenes" not in script_data:
+            jlog("warning", msg="PIXEL_PERFECT_V34: Script None ou sans 'scenes'.")
+            return False
+
+        scenes   = script_data["scenes"]
+        n_scenes = len(scenes)
+
+        total_words = sum(
+            len(re.sub(r'\[.*?\]', '', s.get("text", "")).split())
+            for s in scenes
+        )
+
+        if n_scenes < SCRIPT_MIN_SCENES:
+            jlog("warning", msg=(
+                f"PIXEL_PERFECT_V34: Script rejeté — {n_scenes} scènes "
+                f"(minimum {SCRIPT_MIN_SCENES}). "
+                f"Cause probable : ghost text résiduel ou LLM tronqué."
+            ))
+            return False
+
+        if total_words < SCRIPT_MIN_WORDS:
+            jlog("warning", msg=(
+                f"PIXEL_PERFECT_V34: Script rejeté — {total_words} mots "
+                f"(minimum {SCRIPT_MIN_WORDS}). "
+                f"Script trop court pour une vidéo 40-60s."
+            ))
+            return False
+
+        jlog("info", msg=(
+            f"PIXEL_PERFECT_V34: Script validé — "
+            f"{n_scenes} scènes, {total_words} mots. "
+            f"Durée estimée : {total_words / SCRIPT_TTS_WORDS_PER_SEC:.1f}s"
+        ))
+        return True
+
+    # ─────────────────────────────────────────────────────────────────────
     # ÉTAPE 0 : BRAINSTORMING
     # ─────────────────────────────────────────────────────────────────────
 
@@ -760,6 +725,7 @@ class NexusBrain:
 
     # ─────────────────────────────────────────────────────────────────────
     # ÉTAPE 1 : IDEATION
+    # PIXEL_PERFECT_INTEGRATED: Validation densité après parsing.
     # ─────────────────────────────────────────────────────────────────────
 
     def _get_evergreen_script(self) -> Optional[Dict]:
@@ -825,6 +791,17 @@ class NexusBrain:
                 except Exception:
                     pass
 
+        # PIXEL_PERFECT_INTEGRATED: Validation densité AVANT de retourner le script.
+        # Si le script est trop court (ghost text résiduel ou LLM tronqué),
+        # on force le fallback Evergreen ou FallbackProvider.
+        if script_data and "scenes" in script_data:
+            if not self._validate_script_density(script_data):
+                jlog("warning", msg=(
+                    "PIXEL_PERFECT_V34: Script CLI rejeté par validation densité. "
+                    "Basculement vers Evergreen Vault."
+                ))
+                script_data = None  # Force le chemin Evergreen ci-dessous
+
         if script_data and "scenes" in script_data:
             nb_scenes = len(script_data["scenes"])
             if nb_scenes > self.MAX_SCENES:
@@ -833,10 +810,14 @@ class NexusBrain:
             script_data["meta"]["source"] = "agent_cli_dynamique"
             return script_data
 
-        jlog("warning", msg="CLI parsing échoué. Vérification Evergreen Vault...")
+        jlog("warning", msg="CLI parsing échoué ou rejeté. Vérification Evergreen Vault...")
         evergreen_script = self._get_evergreen_script()
         if evergreen_script:
-            return evergreen_script
+            # PIXEL_PERFECT_INTEGRATED: Validation aussi sur l'evergreen
+            if self._validate_script_density(evergreen_script):
+                return evergreen_script
+            else:
+                jlog("warning", msg="PIXEL_PERFECT_V34: Evergreen rejeté — densité insuffisante.")
 
         jlog("warning", msg="Engagement Fallback Protocol (Mode Dégradé)")
         fallback_script = self.fallback.generate_script(topic)
@@ -855,8 +836,58 @@ class NexusBrain:
         return fallback_script
 
     # ─────────────────────────────────────────────────────────────────────
-    # ÉTAPE 2 : VISUALS (V32: validation taille B-Roll)
+    # ÉTAPE 2 : VISUALS
+    # PIXEL_PERFECT_INTEGRATED: Fond premium généré si vault vide.
     # ─────────────────────────────────────────────────────────────────────
+
+    def _generate_premium_background(
+        self,
+        output_path: str,
+        index: int = 0,
+    ) -> str:
+        """
+        PIXEL_PERFECT_INTEGRATED: Génère un fond premium si le vault est vide.
+
+        Le vault vide (0 B-Roll) était la 3ème cause racine : 42 requêtes échouées
+        → fond blanc pur statique sur toute la vidéo → zéro variation visuelle.
+
+        Solution : fonds blancs avec trace de couleur subtile sur 15% bas de l'écran.
+        Palette issue de config.py V31 — cohérente avec le gradient accent TEAL→PINK.
+          index=0 → trace violet #7B2CBF (accent standard)
+          index=1 → trace teal (105,228,220) — gauche du gradient accent
+          index=2 → trace pink (208,122,148) — droite du gradient accent
+
+        Alpha de la trace : max 12/255 → imperceptible comme fond, perceptible
+        comme variation de fond au montage.
+        """
+        from PIL import Image, ImageDraw
+
+        W, H = 1080, 1920
+
+        palettes = [
+            (123,  44, 191, 12),   # violet premium
+            (105, 228, 220, 10),   # teal (ACCENT_GRADIENT_LEFT)
+            (208, 122, 148, 10),   # pink (ACCENT_GRADIENT_RIGHT)
+        ]
+        r, g, b, max_alpha = palettes[index % len(palettes)]
+
+        img  = Image.new("RGB", (W, H), (255, 255, 255))
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        # Dégradé vertical sur 15% du bas : max_alpha → 0 (de bas en haut)
+        accent_h = int(H * 0.15)
+        for dy in range(accent_h):
+            # dy=0 = haut de la zone accent, dy=accent_h-1 = bas de l'écran
+            alpha = int(max_alpha * (1.0 - dy / accent_h))
+            y     = H - accent_h + dy
+            draw.rectangle([0, y, W, y + 1], fill=(r, g, b, alpha))
+
+        img.save(output_path, quality=98)
+        jlog("info", msg=(
+            f"PIXEL_PERFECT_V34: Fond premium généré "
+            f"(palette {index % len(palettes)}) → {Path(output_path).name}"
+        ))
+        return output_path
 
     async def _step_2_visuals(
         self,
@@ -883,6 +914,7 @@ class NexusBrain:
         broll_indices = []
         broll_count   = 0
         broll_rejected = 0
+        vault_misses   = 0  # PIXEL_PERFECT_INTEGRATED: compteur de misses vault
 
         for i, scene in enumerate(scenes):
             raw_prompt   = scene.get("visual_prompt", "")
@@ -895,9 +927,6 @@ class NexusBrain:
             )
 
             if matched_asset and os.path.exists(matched_asset.get("local_path", "")) and broll_available:
-                # MOTION_ENGINE_V32: PILIER 2 — Validation taille B-Roll
-                # Rejet des images qui couvriraient plus de BROLL_MAX_COVERAGE_RATIO
-                # du canvas (évite le bug "B-Roll plein écran gris" mesuré en V31).
                 img_path = matched_asset["local_path"]
                 broll_ok = True
 
@@ -916,13 +945,41 @@ class NexusBrain:
                             f"{Path(img_path).name}"
                         ))
                 except Exception:
-                    pass  # En cas d'erreur PIL, on accepte l'image
+                    pass
 
                 if broll_ok:
                     self.vault.mark_as_used(img_path)
                     broll_indices.append(i)
                     scene["_broll_image_path"] = img_path
                     broll_count += 1
+            else:
+                vault_misses += 1
+
+        # PIXEL_PERFECT_INTEGRATED: Si le vault est entièrement vide (100% de misses),
+        # remplace le fond blanc pur par des fonds premium à variation de couleur.
+        # Condition : au moins 80% de misses (évite le déclenchement si quelques
+        # B-Roll sont présents).
+        miss_ratio = vault_misses / max(len(scenes), 1)
+        if miss_ratio >= 0.80:
+            jlog("info", msg=(
+                f"PIXEL_PERFECT_V34: Vault quasi-vide ({vault_misses}/{len(scenes)} misses). "
+                f"Génération de fonds premium pour variation visuelle."
+            ))
+            for i in range(len(scenes)):
+                premium_path = os.path.join(
+                    self.root_dir,
+                    f"bg_premium_{i:03d}.jpg"
+                )
+                # PIXEL_PERFECT_INTEGRATED: Rotation de palette toutes les 8 scènes
+                # → variation subtile perceptible au montage, pas dans une seule scène.
+                palette_index = i // 8
+                self._generate_premium_background(premium_path, index=palette_index)
+                asset_paths[i] = premium_path
+        else:
+            jlog("info", msg=(
+                f"PIXEL_PERFECT_V34: {vault_misses} misses vault / {len(scenes)} scènes "
+                f"— ratio {miss_ratio:.0%} < 80%, fonds blancs conservés."
+            ))
 
         jlog("info", msg=(
             f"Visuels: {broll_count} B-Roll acceptés, "
@@ -932,29 +989,64 @@ class NexusBrain:
 
     # ─────────────────────────────────────────────────────────────────────
     # ÉTAPE 3 : AUDIO
+    # PIXEL_PERFECT_INTEGRATED: Durée silence = max(30s, word_count/2.5).
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_3_audio(self, scenes: List[Dict], speed: float = 1.0) -> str:
         jlog("step", msg="Step 3: Génération Audio [NUKE_V28]")
 
-        texts_to_read = []
-
         def clean_for_tts(text: str) -> str:
             return re.sub(r'\[(BOLD|LIGHT|BADGE|PAUSE)\]', '', text).strip()
 
-        for s in scenes:
-            texts_to_read.append(clean_for_tts(s.get("text", "")))
-
-        full_text = " ".join(texts_to_read)
-        is_test_mode = getattr(self.tts, "test_mode", False)
+        texts_to_read = [clean_for_tts(s.get("text", "")) for s in scenes]
+        full_text     = " ".join(texts_to_read)
+        is_test_mode  = getattr(self.tts, "test_mode", False)
 
         if is_test_mode:
             jlog("warning", msg="🛡️ TEST MODE / FALLBACK AUDIO ACTIF.")
-            duration = max(3.0, len(full_text) / 13.0)
+
+            # PIXEL_PERFECT_INTEGRATED: Calcul durée aligné sur le contenu réel.
+            #
+            # Problème V32 : durée = max(3.0, len(full_text) / 13.0)
+            #   → 30 chars de script fantôme → 2.3s → vidéo de 2.3s.
+            #
+            # Fix : durée = max(MIN_DURATION, word_count / (TTS_WPS * speed))
+            #   TTS_WPS = 2.5 mots/sec @speed=1.0 (mesure ElevenLabs multilingual v2)
+            #   MIN_DURATION = 30s (garantit un contenu minimal diffusable)
+            #   word_count = mots réels du script (sans tags)
+            #
+            # Exemple avec script valide 110 mots, speed=1.1 :
+            #   durée = 110 / (2.5 * 1.1) = 40.0s → proche de la référence 44.033s ✓
+            #
+            # Exemple avec script fantôme 5 mots (après purge) :
+            #   durée = max(30.0, 5 / (2.5 * 1.0)) = max(30.0, 2.0) = 30.0s
+            #   → vidéo de 30s acceptable, pas de 2.3s cassée.
+
+            real_word_count = len([
+                w for w in full_text.split()
+                if re.sub(r'[^\w]', '', w)
+            ])
+
+            TTS_WPS      = SCRIPT_TTS_WORDS_PER_SEC * speed
+            MIN_DURATION = 30.0
+
+            estimated_duration = max(
+                MIN_DURATION,
+                real_word_count / max(TTS_WPS, 0.1)
+            )
+
+            jlog("info", msg=(
+                f"PIXEL_PERFECT_V34: Audio fallback — "
+                f"{real_word_count} mots → "
+                f"durée cible {estimated_duration:.2f}s "
+                f"(TTS_WPS={TTS_WPS:.2f}, min={MIN_DURATION}s)"
+            ))
+
             dummy_audio_path = os.path.join(self.root_dir, "silence_nucleaire_v32.mp3")
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                "-t", str(duration), "-q:a", "9", "-acodec", "libmp3lame", dummy_audio_path
+                "-t", str(estimated_duration), "-q:a", "9",
+                "-acodec", "libmp3lame", dummy_audio_path
             ]
             try:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
@@ -964,8 +1056,8 @@ class NexusBrain:
                     raise FileNotFoundError("FFmpeg n'a pas généré le fichier.")
             except Exception as e:
                 from moviepy.editor import AudioClip
-                make_frame = lambda t: [0, 0]
-                silence_clip = AudioClip(make_frame, duration=duration, fps=44100)
+                make_frame   = lambda t: [0, 0]
+                silence_clip = AudioClip(make_frame, duration=estimated_duration, fps=44100)
                 silence_clip.write_audiofile(dummy_audio_path, logger=None, fps=44100)
                 silence_clip.close()
                 return dummy_audio_path
@@ -1001,7 +1093,7 @@ class NexusBrain:
         try:
             audio_clip     = AudioFileClip(audio_path)
             total_duration = audio_clip.duration
-            scenes = copy.deepcopy(script_data.get("scenes", []))
+            scenes         = copy.deepcopy(script_data.get("scenes", []))
 
             if not scenes:
                 raise ValueError("Aucune scène dans les données de script clonées.")
@@ -1024,8 +1116,8 @@ class NexusBrain:
                             + clean.count('!') * 5 + clean.count('?') * 5)
                 return float(base_len + pauses)
 
-            weights       = [estimate_reading_weight(s.get("text", "")) for s in scenes]
-            total_weight  = sum(weights)
+            weights      = [estimate_reading_weight(s.get("text", "")) for s in scenes]
+            total_weight = sum(weights)
 
             if total_weight > 0:
                 raw_durations = [(w / total_weight) * total_duration for w in weights]
@@ -1092,7 +1184,8 @@ class NexusBrain:
                             try:
                                 direction = self.animator.get_slide_direction(i)
                                 trans     = self.animator.create_slide_transition(
-                                    clips[-1], clip, transition_duration=0.28, direction=direction, spring=True,
+                                    clips[-1], clip, transition_duration=0.28,
+                                    direction=direction, spring=True,
                                 )
                                 clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.28))
                                 clips.append(trans.set_duration(0.28))
@@ -1101,7 +1194,9 @@ class NexusBrain:
 
                         elif scene_transition == "fade" and self.enable_fade_trans:
                             try:
-                                trans = self.animator.create_fade_transition(clips[-1], clip, transition_duration=0.10)
+                                trans = self.animator.create_fade_transition(
+                                    clips[-1], clip, transition_duration=0.10
+                                )
                                 clips[-1] = clips[-1].set_duration(max(0.05, clips[-1].duration - 0.10))
                                 clips.append(trans.set_duration(0.10))
                                 transition_applied = True
@@ -1135,7 +1230,6 @@ class NexusBrain:
             is_tts_test_mode = getattr(self.tts, "test_mode", False)
 
             if not is_tts_test_mode and self.subtitle_burner.available:
-                # Tentative Whisper
                 try:
                     word_timeline = self.subtitle_burner.transcribe_to_timeline(audio_path)
                     if word_timeline and len(word_timeline) > 0:
@@ -1146,23 +1240,19 @@ class NexusBrain:
                 except Exception:
                     pass
 
-            # MOTION_ENGINE_V32: ROOT CAUSE FIX — Détection et correction timeline scène
-            # Si Whisper a échoué ou si on est en test mode, la subtitle_timeline
-            # contient des phrases entières. Le fallback synthétique découpe mot-par-mot.
+            # MOTION_ENGINE_V32: Détection et correction timeline scène
             if not _is_word_level_timeline(subtitle_timeline):
                 jlog("warning", msg=(
-                    "MOTION_ENGINE_V32: Timeline scène détectée "
-                    f"(avg {sum(len(t[2].split()) for t in subtitle_timeline[:5]) / min(5, len(subtitle_timeline)):.1f} mots/entrée). "
+                    "MOTION_ENGINE_V32: Timeline scène détectée. "
                     "Activation du découpage synthétique mot-par-mot."
                 ))
                 subtitle_timeline = _build_synthetic_word_timeline(subtitle_timeline)
                 jlog("success", msg=(
-                    f"MOTION_ENGINE_V32: Timeline synthétique → {len(subtitle_timeline)} mots. "
-                    "Hiérarchie typographique + spring sémantique activés."
+                    f"MOTION_ENGINE_V32: Timeline synthétique → {len(subtitle_timeline)} mots."
                 ))
 
             # MOTION_ENGINE_V32: PILIER 4 — Fermeture des gaps inter-mots
-            before_gap = len(subtitle_timeline)
+            before_gap        = len(subtitle_timeline)
             subtitle_timeline = _close_word_gaps(subtitle_timeline)
             jlog("info", msg=f"MOTION_ENGINE_V32: Gaps inter-mots comblés ({before_gap} mots).")
 
@@ -1201,9 +1291,6 @@ class NexusBrain:
             else:
                 video_track = video_track.set_audio(audio_clip).set_duration(total_duration)
 
-            # MOTION_ENGINE_V32: PILIER 2 — Zoom caméra virtuelle dans burn_subtitles
-            # Le SubtitleBurner gère le zoom global 1.00→1.03 en interne (config_v31.py).
-            # Ici on passe la broll_schedule avec timestamps corrigés par l'anticipation.
             final_clip = self.subtitle_burner.burn_subtitles(
                 video_clip      = video_track,
                 timeline        = subtitle_timeline,
@@ -1279,7 +1366,7 @@ class NexusBrain:
         jlog("info", msg="🎨 FAST DA TEST MODE V32 ACTIVATED")
 
         if not script_data:
-            topic = await self._step_0_brainstorm_topic()
+            topic       = await self._step_0_brainstorm_topic()
             script_data = await self._step_1_ideation(topic, "INSIDER")
 
         if not script_data or not script_data.get("scenes"):

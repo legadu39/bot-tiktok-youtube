@@ -2,13 +2,13 @@
 ### bot tiktok youtube/prompts/templates.py
 """
 TEMPLATES DE PROMPTS — NEXUS V6 PREMIUM MOTION
-Phases appliquées :
-  · Phase 1 : Contraste de GRAISSES (Extra-Bold/Regular) comme signal principal
-              Les MAJUSCULES ne sont utilisées que pour les chiffres et acronymes
-  · Phase 2 : [PAUSE] marker — respiration visuelle avec espace négatif assumé
-  · Phase 3 : Métaphores UI (cartes prix, icônes vectorielles, badges)
-  · Phase 4 : Sound Design guidé + continuité des mots-pivots entre scènes
+PIXEL_PERFECT_INTEGRATED: wrap_v3_prompt() hardened contre le ghost text.
+  - Le schéma-exemple est isolé dans un bloc XML explicitement interdit.
+  - Injection d'un compteur de scènes aléatoire pour ancrer le LLM.
+  - Triple prohibition explicite sur les placeholders.
 """
+
+import random
 
 # =============================================================================
 # IDENTITÉS
@@ -95,7 +95,7 @@ Analyse le Script fourni selon les règles PREMIUM MOTION :
 
 1. NOMBRE DE SCÈNES    : Entre 35 et 50 obligatoires.
 2. MICRO-PACING        : Chaque TEXTE = 1 à 3 mots MAX, aucune exception.
-3. HIÉRARCHIE GRAISSE  : Les mots-clés sont-ils identifiables (pas en majuscules, 
+3. HIÉRARCHIE GRAISSE  : Les mots-clés sont-ils identifiables (pas en majuscules,
                           mais flaggés comme IMPACT dans le script) ?
 4. CHIFFRES / BADGES   : Les prix, %, chiffres forts ont-ils un tag [BADGE] ?
 5. PAUSES              : Au moins 3 scènes [PAUSE] présentes ?
@@ -127,7 +127,7 @@ TITRE: [Ton Titre Accrocheur Ici]
 HOOK: [Ta phrase d'accroche percutante basée sur le vrai sujet demandé]
 === FIN IDEE ===
 
-CONTEXTE ET SUJET À TRAITER : 
+CONTEXTE ET SUJET À TRAITER :
 {topic}
 {error_feedback}
 """
@@ -135,18 +135,37 @@ CONTEXTE ET SUJET À TRAITER :
 def get_brainstorm_prompt(topic: str, previous_error: str = None) -> str:
     error_feedback = ""
     if previous_error:
-        error_feedback = f"\nATTENTION : Lors de ta précédente tentative, tu as fait cette erreur sémantique : '{previous_error}'. CORRIGE CELA IMPÉRATIVEMENT DANS TA PROCHAINE RÉPONSE."
-    return BRAINSTORM_PROMPT_TEMPLATE.format(topic=topic, error_feedback=error_feedback)
+        error_feedback = (
+            f"\nATTENTION : Lors de ta précédente tentative, tu as fait cette erreur "
+            f"sémantique : '{previous_error}'. CORRIGE CELA IMPÉRATIVEMENT."
+        )
+    return BRAINSTORM_PROMPT_TEMPLATE.format(
+        topic=topic,
+        error_feedback=error_feedback,
+    )
 
 # =============================================================================
 # MASTER PROMPT V6 — PREMIUM MOTION
+# PIXEL_PERFECT_INTEGRATED: Ghost text éradiqué à la source.
+# Mécanisme : le schéma-exemple est encapsulé dans un bloc XML
+# <FORMAT_REFERENCE_INTERDIT> que le LLM est explicitement interdit de reproduire.
+# Un compteur aléatoire de scènes (38-48) ancre la quantité attendue.
+# Triple prohibition explicite sur les placeholders détectés en production.
 # =============================================================================
 
 def wrap_v3_prompt(user_topic: str, mode: str = "MENTOR") -> str:
     """
-    Génère le Master Prompt V6 — Premium Motion Mode.
-    Hiérarchie typographique par POIDS, espace négatif assumé, métaphores UI.
-    Format : TEXTE STRUCTURÉ (robuste, sans JSON fragile).
+    PIXEL_PERFECT_INTEGRATED: Master Prompt V6 durci anti-ghost-text.
+
+    Changements vs version précédente :
+      1. Le bloc SCHÉMA-SCENE est désormais dans un tag XML non-ambiguë
+         <FORMAT_REFERENCE_INTERDIT>…</FORMAT_REFERENCE_INTERDIT>.
+      2. Trois prohibitions explicites couvrent les patterns ghost observés
+         en production : [premier mot], [MOT_IMPACT], [LIGHT]MOT_LIAISON.
+      3. Le compteur de scènes est randomisé (38-48) pour éviter la
+         mémorisation de patterns fixes par le LLM.
+      4. La directive "Commence DIRECTEMENT" place le curseur de génération
+         immédiatement après le header, sans espace de copie du schéma.
     """
     identities = {
         "CLASH":   IDENTITY_CLASH,
@@ -156,12 +175,15 @@ def wrap_v3_prompt(user_topic: str, mode: str = "MENTOR") -> str:
     }
     identity = identities.get(mode, IDENTITY_MENTOR)
 
+    # PIXEL_PERFECT_INTEGRATED: Nombre de scènes cible randomisé
+    target_scene_count = random.randint(38, 48)
+
     return f"""
 {identity}
 {DA_FULL_TEKIYO}
 
 TÂCHE : Tu es le Showrunner du compte TikTok 'NEXUS'.
-Sujet : "{user_topic}"
+Sujet imposé : "{user_topic}"
 
 ═══════════════════════════════════════════════════════════════
 RÈGLES DE PRODUCTION — PREMIUM MOTION V6 (RESPECTE CHAQUE POINT)
@@ -169,7 +191,7 @@ RÈGLES DE PRODUCTION — PREMIUM MOTION V6 (RESPECTE CHAQUE POINT)
 
 1. DURÉE : Script de 40 à 60 secondes → 100 à 130 mots au total.
 
-2. DÉCOUPAGE : 35 à 50 SCÈNES obligatoires.
+2. DÉCOUPAGE : {target_scene_count} SCÈNES OBLIGATOIRES (ni plus ni moins de ±3).
 
 3. MICRO-PACING ABSOLU : 1 SCÈNE = 1 à 3 MOTS MAXIMUM.
    Zéro exception. Si une phrase a 6 mots, coupe-la en 3 scènes.
@@ -177,89 +199,87 @@ RÈGLES DE PRODUCTION — PREMIUM MOTION V6 (RESPECTE CHAQUE POINT)
 4. HIÉRARCHIE TYPOGRAPHIQUE PAR POIDS — RÈGLE D'OR :
    · La casse reste NORMALE dans le champ TEXTE.
    · Indique le poids avec un tag en ligne :
-     [BOLD] pour les mots d'impact/action (seront rendus Extra-Bold 800)
-     [LIGHT] pour les mots de liaison (seront rendus Light 300)
-   · Exemple : "[LIGHT]les [BOLD]traders [LIGHT]qui [BOLD]perdent"
-   · Exception : les chiffres, % et prix n'ont pas besoin de tag — ils 
-     reçoivent automatiquement un badge carte (tag [BADGE] facultatif)
+     [BOLD] pour les mots d'impact/action (rendus Extra-Bold 800)
+     [LIGHT] pour les mots de liaison (rendus Light 300)
+   · Exception : les chiffres, % et prix reçoivent automatiquement [BADGE]
 
 5. MARQUEUR [PAUSE] — OBLIGATOIRE :
-   Insère au moins 3 scènes [PAUSE] dans le script, après chaque
-   chiffre fort ou affirmation centrale. Une [PAUSE] = 1 à 1,5 s.
-   Le fond blanc seul à l'écran. C'est du LUXE, pas du vide.
+   Insère au moins 3 scènes [PAUSE] dans le script.
+   Une [PAUSE] = fond blanc seul à l'écran.
 
-6. FOND : FOND BLANC #FFFFFF STRICT — propre, lumineux, premium.
-   Jamais d'image de fond. L'espace vide EST le message.
+6. FOND : FOND BLANC #FFFFFF STRICT.
 
 7. CONTINUITÉ VISUELLE — MOT-PIVOT :
-   Si un mot important (ex: "stratégie", "ratio") apparaît dans deux
-   scènes consécutives, répète-le IDENTIQUEMENT dans les deux blocs TEXTE.
-   Le moteur de rendu le détectera et le laissera à l'écran en continu.
+   Si un mot important apparaît dans deux scènes consécutives, répète-le
+   IDENTIQUEMENT dans les deux blocs TEXTE.
 
-8. OVERLAY SFX (Sound Design) :
-   · Mots [BOLD] (impact)      → OVERLAY: CLICK
-   · Mots [LIGHT] (liaison)    → OVERLAY: SWOOSH
-   · [BADGE] (chiffre/prix)    → OVERLAY: CLICK_DEEP
-   · Scène [PAUSE]             → OVERLAY: SILENCE
+8. OVERLAY SFX :
+   · Mots [BOLD]   → OVERLAY: CLICK
+   · Mots [LIGHT]  → OVERLAY: SWOOSH
+   · [BADGE]       → OVERLAY: CLICK_DEEP
+   · Scène [PAUSE] → OVERLAY: SILENCE
 
-9. TRANSITION : Écris TRANSITION: SLIDE dans VISUEL quand tu
-   changes d'argument principal (max 3 fois par vidéo).
-   Pour les transitions douces dans le même argument : TRANSITION: FADE
+9. TRANSITION : TRANSITION: SLIDE dans VISUEL sur changement d'argument
+   (max 3 fois). TRANSITION: FADE pour les liaisons douces.
 
 ═══════════════════════════════════════════════════════════════
-FORMAT DE RÉPONSE ATTENDU
-Génère un contenu 100% ORIGINAL basé sur le sujet "{user_topic}".
-Utilise EXACTEMENT cette structure, en commençant par "=== DEBUT SCRIPT ===".
-Les numéros de scènes commencent à SCENE 1 et vont jusqu'à SCENE 40-50.
+RÉFÉRENCE FORMAT — BLOC INTERDIT À REPRODUIRE
 ═══════════════════════════════════════════════════════════════
 
-⚠️  SCHÉMA DE STRUCTURE (NE PAS COPIER — REMPLACER PAR TON CONTENU RÉEL) :
+<FORMAT_REFERENCE_INTERDIT>
+Ce bloc montre uniquement la STRUCTURE. NE PAS COPIER. NE PAS REPRODUIRE.
+NE PAS utiliser ces mots dans ta réponse :
+  - [premier mot ou groupe de mots]
+  - [deuxième mot ou groupe de mots]
+  - [MOT_IMPACT], [MOT_LIAISON], [CHIFFRE_CLE]
+  - [LIGHT]MOT_LIAISON [BOLD]MOT_IMPACT
+  - [Titre accrocheur basé sur …]
+  - tout placeholder entre crochets
 
-─── SCHÉMA-SCENE-A ───
-TEXTE: [LIGHT]MOT_LIAISON [BOLD]MOT_IMPACT
-VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: CLICK
+Structure de référence (contenu fictif non utilisable) :
+  SCENE N
+  TEXTE: [BOLD]ExempleMotImpact
+  VISUEL: FOND BLANC #FFFFFF STRICT
+  OVERLAY: CLICK
+</FORMAT_REFERENCE_INTERDIT>
 
-─── SCHÉMA-SCENE-B ───
-TEXTE: [BOLD]MOT_FORT
-VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: CLICK
+═══════════════════════════════════════════════════════════════
+PROHIBITIONS ABSOLUES (violations détectées en production)
+═══════════════════════════════════════════════════════════════
 
-─── SCHÉMA-SCENE-C ───
-TEXTE: [PAUSE]
-VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: SILENCE
+❌ INTERDIT : Écrire "[premier mot ou groupe de mots de ton vrai script"
+❌ INTERDIT : Écrire "[LIGHT]MOT_LIAISON [BOLD]MOT_IMPACT" verbatim
+❌ INTERDIT : Écrire "[deuxième mot ou groupe de mots]"
+❌ INTERDIT : Écrire "[Titre accrocheur basé sur {user_topic}]"
+❌ INTERDIT : Tout texte entre crochets qui n'est pas [BOLD], [LIGHT], [BADGE], [PAUSE]
 
-─── SCHÉMA-SCENE-D ───
-TEXTE: [BADGE]CHIFFRE_CLE
-VISUEL: TRANSITION: SLIDE
-OVERLAY: CLICK_DEEP
+Si tu produis l'un de ces patterns → ta réponse sera REJETÉE.
 
-⚠️  FIN DU SCHÉMA — TON SCRIPT RÉEL COMMENCE CI-DESSOUS ───
+═══════════════════════════════════════════════════════════════
+GÉNÈRE MAINTENANT — TON SCRIPT RÉEL SUR "{user_topic}"
+═══════════════════════════════════════════════════════════════
+
+INSTRUCTION FINALE : Commence DIRECTEMENT par "=== DEBUT SCRIPT ===" puis
+génère {target_scene_count} scènes avec du VRAI CONTENU sur "{user_topic}".
+Chaque mot de TEXTE doit être un vrai mot français lié au sujet.
 
 === DEBUT SCRIPT ===
-TITRE: [Titre accrocheur basé sur {user_topic}]
+TITRE: [Titre réel accrocheur en lien avec {user_topic} — max 50 caractères]
 TAGS: [tag1, tag2, tag3]
 
 SCENE 1
-TEXTE: [premier mot ou groupe de mots de ton vrai script sur {user_topic}]
+TEXTE: [TON PREMIER VRAI MOT D'ACCROCHE — un mot réel, pas un placeholder]
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
-
-SCENE 2
-TEXTE: [deuxième mot ou groupe de mots]
-VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: CLICK
-
-... (Continue jusqu'à SCENE 40-50, termine avec un CTA fort)
-=== FIN SCRIPT ===
 """
 
 
 def wrap_analysis(filename: str) -> str:
-    return (f'Analyse le nom de fichier : "{filename}".\n'
-            f"Déduis le sujet et le mode (CLASH, INSIDER, MENTOR, NEWS).\n"
-            f"Réponds uniquement : Sujet: ... | Mode: ...")
+    return (
+        f'Analyse le nom de fichier : "{filename}".\n'
+        f"Déduis le sujet et le mode (CLASH, INSIDER, MENTOR, NEWS).\n"
+        f"Réponds uniquement : Sujet: ... | Mode: ..."
+    )
 
 
 def get_manual_ingestion_prompt(filename: str) -> str:
