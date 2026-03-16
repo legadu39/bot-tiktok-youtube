@@ -3,6 +3,9 @@
 # FIX_V27_ROOT_CAUSE: Purge absolue de l'état et sécurisation des données d'entrée.
 # FIX_V27_CLI: Moteur asynchrone avec Retry et Backoff exponentiel pour l'Agent Web.
 # NUKE_V28: Éradication absolue des données résiduelles. Refonte totale Fallback/Audio.
+# FIX_GHOST_TEXT: Blacklist anti-placeholder dans _parse_script_from_text.
+#                 Empêche le texte d'exemple du format prompt ("Votre phrase d'accroche ici")
+#                 de se retrouver injecté comme scène réelle lors du rendu vidéo.
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  DELTA V28 vs V27 (Approche Nucléaire anti-fuite)                            ║
@@ -71,6 +74,42 @@ _VISUAL_PROMPT_RENDER_INSTRUCTIONS = [
     "#ffffff", "#000000", "strict", "aucun visuel", "no image",
     "transition:", "slide", "fade",
 ]
+
+
+# FIX_GHOST_TEXT: Textes fantômes connus issus du bloc FORMAT EXEMPLE de wrap_v3_prompt.
+# Quand le LLM reproduit le schéma exemple au lieu de générer du contenu original,
+# ces chaînes apparaissent comme premières scènes et polluent les sous-titres vidéo.
+# Toute scène dont le texte (en minuscules) contient l'une de ces chaînes est rejetée.
+_GHOST_TEXT_BLACKLIST = frozenset([
+    "votre phrase",
+    "d'accroche ici",
+    "la suite de votre idée",
+    "un point fort.",
+    "chiffrecle",
+    "mot_impact",
+    "mot_liaison",
+    "mot_fort",
+    "chiffre_cle",
+    "insert_ton_texte",
+    "premier mot ou groupe",
+    "deuxième mot ou groupe",
+    "[titre accrocheur",
+    "schéma-scene",
+    "exemple de structure",
+])
+
+
+def _is_ghost_text(scene_text: str) -> bool:
+    """
+    FIX_GHOST_TEXT: Retourne True si le texte de scène est un placeholder issu
+    du bloc FORMAT EXEMPLE du prompt — jamais du vrai contenu généré.
+    """
+    if not scene_text:
+        return False
+    t = scene_text.lower().strip()
+    # FIX_GHOST_TEXT: Retire les tags [BOLD]/[LIGHT]/[BADGE] avant comparaison
+    t_clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', t).strip()
+    return any(ghost in t_clean for ghost in _GHOST_TEXT_BLACKLIST)
 
 
 def _sanitize_visual_prompt(raw_prompt: str) -> Optional[str]:
@@ -415,6 +454,20 @@ class NexusBrain:
                 elif "TRANSITION: FADE" in scene_visuel.upper() or "TRANSITION : FADE" in scene_visuel.upper():
                     transition_type = "fade"
 
+                # FIX_GHOST_TEXT: Rejeter les scènes dont le texte correspond à un placeholder
+                # du bloc FORMAT EXEMPLE de wrap_v3_prompt (ex: "Votre phrase d'accroche ici").
+                # Ces textes fantômes apparaissent quand le LLM reproduit l'exemple au lieu
+                # de générer du contenu original — ils ne doivent JAMAIS atteindre le rendu.
+                if scene_text and _is_ghost_text(scene_text):
+                    jlog(
+                        "warning",
+                        msg=(
+                            f"FIX_GHOST_TEXT: Scène {i} rejetée — texte fantôme détecté "
+                            f"(placeholder du format exemple) : «{scene_text[:60]}»"
+                        )
+                    )
+                    continue  # FIX_GHOST_TEXT: scène ignorée, on passe à la suivante
+
                 if scene_text:
                     scenes.append({
                         "id":               i,
@@ -558,6 +611,16 @@ class NexusBrain:
                     possible_json = json.loads(clean_json)
                     if "scenes" in possible_json:
                         script_data = possible_json
+                        # FIX_GHOST_TEXT: Purge des scènes fantômes dans le chemin JSON aussi
+                        if script_data and "scenes" in script_data:
+                            original_count = len(script_data["scenes"])
+                            script_data["scenes"] = [
+                                s for s in script_data["scenes"]
+                                if not _is_ghost_text(s.get("text", ""))
+                            ]
+                            purged = original_count - len(script_data["scenes"])
+                            if purged > 0:
+                                jlog("warning", msg=f"FIX_GHOST_TEXT: {purged} scène(s) fantôme(s) purgée(s) du JSON.")
                 except Exception:
                     pass
 
@@ -751,6 +814,20 @@ class NexusBrain:
 
             if not scenes:
                 raise ValueError("Aucune scène dans les données de script clonées.")
+
+            # FIX_GHOST_TEXT: Purge de sécurité finale juste avant l'assemblage.
+            # Même si les étapes précédentes ont filtré, on vérifie une dernière fois
+            # que la liste ne contient aucun texte fantôme avant de construire la timeline.
+            ghost_scenes_found = [s for s in scenes if _is_ghost_text(s.get("text", ""))]
+            if ghost_scenes_found:
+                jlog(
+                    "warning",
+                    msg=(
+                        f"FIX_GHOST_TEXT: {len(ghost_scenes_found)} scène(s) fantôme(s) "
+                        f"détectée(s) au dernier contrôle d'assemblage. Purge immédiate."
+                    )
+                )
+                scenes = [s for s in scenes if not _is_ghost_text(s.get("text", ""))]
 
             # NUKE_V28: Le Print Géant d'Analyse (Debug absolu avant le Kill Switch)
             print(f"\n{'='*80}")

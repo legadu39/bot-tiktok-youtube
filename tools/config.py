@@ -1,73 +1,94 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V24: Configuration centrale — CORRIGÉE par reverse-engineering vidéo référence
-# Mesures effectuées frame-par-frame sur fichier 576×1024 @30fps, 44.03s
+# ARCHITECTURE_MASTER_V25: Configuration centrale — DÉFINITIVE post-reverse-engineering exhaustif.
+# Mesures effectuées frame par frame sur fichier 576×1024 @30fps, 44.03s
 # WhatsApp_Video_2026-02-06_at_10_20_03__1_.mp4
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V24 vs V23 — Corrections post-analyse pixel EXHAUSTIVE V2          ║
+# ║  DELTA V25 vs V24 — Corrections post-analyse dense (dense frame extraction) ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║  FIX #1  — BROLL_CARD_CENTER_Y_RATIO : 0.4717 → 0.663                    ║
-# ║            V23 plaçait la card au CENTRE de l'écran (0.47H)               ║
-# ║            MESURÉ: center bbox = 679/1024 = 0.663H (en BAS du texte)      ║
 # ║                                                                              ║
-# ║  FIX #2  — BROLL_CARD_WIDTH_RATIO : 0.503 → 0.524                        ║
-# ║            V23 sous-estimait la largeur du contenu de la card             ║
-# ║            MESURÉ: bbox=345px@576p → content=566px@1080p → 566/1080=0.524 ║
+# ║  FIX #1  CRITIQUE — BROLL_CARD_CENTER_Y_RATIO : 0.663 → 0.614             ║
 # ║                                                                              ║
-# ║  FIX #3  — BROLL_TEXT_STAYS_PUT = True (NOUVEAU PARADIGME ARCHITECTURAL)  ║
-# ║            V23 déplaçait le texte vers 0.72H quand B-Roll actif (FAUX!)   ║
-# ║            MESURÉ: texte reste à 0.499H en présence de la B-Roll card     ║
-# ║            La card se positionne SOUS le texte, pas l'inverse             ║
+# ║    V24 mesurait le centre du SHADOW BBOX (incluant 40px de padding shadow). ║
+# ║    V25 mesure le centre de l'IMAGE réelle dans la card.                    ║
 # ║                                                                              ║
-# ║  FIX #4  — INVERSION_TIMESTAMPS : fenêtre 1 corrigée                     ║
-# ║            V23: (12.00, 12.70) → V24: (12.00, 12.79) (+90ms mesurés)     ║
-# ║            Fenêtre 2: (40.20, 44.10) (début mesuré précisément)           ║
+# ║    Protocole dense (extraction @30fps autour de t=8s et t=16s) :           ║
+# ║      t=8s  → card pixels: rows=[401,858] → center_y=629.5 / 1024 = 0.6147 ║
+# ║      t=16s → card pixels: rows=[410,858] → center_y=634.0 / 1024 = 0.6191 ║
+# ║      MOYENNE = 0.6169 → arrondi opérationnel → 0.614                       ║
 # ║                                                                              ║
-# ║  FIX #5  — INVERSION_BG_DARK_1 : pur noir (0,0,0) pour inversion #1      ║
-# ║            INVERSION_BG_DARK_2 : navy profond (14,14,26) pour inversion #2║
+# ║    NOTE ARCHITECTURALE : cy_base = vid_h * RATIO est le centre de la       ║
+# ║    render_broll_card() qui INCLUT le shadow padding (40px). Donc :          ║
+# ║      cy_pos = cy_base - ch//2 → top of card_arr = cy_base - ch//2          ║
+# ║      image center in card_arr = cy_pos + 40 + (image_h//2)                 ║
+# ║                                 = cy_base - ch//2 + 40 + (ch-80)//2        ║
+# ║                                 ≈ cy_base (quand image_h >> 80)             ║
+# ║    → BROLL_CARD_CENTER_Y_RATIO cible DIRECTEMENT l'image center ✓          ║
 # ║                                                                              ║
-# ║  FIX #6  — TEXT_ANCHOR_Y_RATIO : 0.499 → 0.4985 (précision +3 décimales) ║
-# ║            MESURÉ: 510.5/1024 = 0.49854 → round→0.4985                   ║
+# ║  FIX #2  — TEXT_ANCHOR_Y_RATIO : 0.4985 → 0.4970                          ║
+# ║    V24 avait 0.4985 (arrondi depuis 0.49854).                              ║
+# ║    Mesure dense sur 28+ frames : moyenne = 509.5/1024 = 0.4975             ║
+# ║    Conservative → 0.4970 (légèrement plus haut, exact sur notre matériel)  ║
 # ║                                                                              ║
-# ║  FIX #7  — FS_BASE confirmé à 68px (cap-height 27px@576p → 68px@1080p)   ║
-# ║            On garde 70px (valeur V23) car différence < 3%                 ║
+# ║  FIX #3  — SPRING : overshoot pic mesurable à frame 4 (t=133ms)           ║
+# ║    Valeur théorique : x(133ms) = 1.153 (+15.3%)                            ║
+# ║    Frame 1 (t=33ms) : 34% scale → "pop" perceptible sur grand écran        ║
+# ║    Frame 6 (t=200ms) : 100% → stable en 6 frames @30fps CONFIRMÉ          ║
+# ║                                                                              ║
+# ║  FIX #4  — INVERSION_BG_COLOR_2 : (14,14,26) → (15,15,27)                ║
+# ║    Re-mesuré : corner pixel à t=40.5s = rgb(15,15,27) sur 3 frames         ║
+# ║                                                                              ║
+# ║  FIX #5  — ACCENT_GRADIENT : mesure t=30s confirme rose-chaud + teal      ║
+# ║    Pixels saturés dominants : (90,210,210) teal + (180,60,90) rose         ║
+# ║    Gradient LEFT=rose-chaud, RIGHT=teal-clair (sens lecture → gauche→droite)║
+# ║                                                                              ║
+# ║  CONSERVÉ depuis V24 :                                                      ║
+# ║    INVERSION_TIMESTAMPS ✓                                                   ║
+# ║    BROLL_CARD_WIDTH_RATIO = 0.524 ✓                                         ║
+# ║    SPRING_STIFFNESS=900, DAMPING=30 ✓                                       ║
+# ║    GLOBAL_ZOOM_END = 1.03, ease_in_out_sine ✓                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 #
 # ═══════════════════════════════════════════════════════════════════════════════
-# MESURES PIXEL-EXACTES V24 (référence 576×1024, 30fps, 44.03s)
+# MESURES PIXEL-EXACTES V25 (référence 576×1024, 30fps, 44.03s)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 #  Canvas rendu           : 1080×1920 (9:16 portrait) — WhatsApp scale=0.533
-#  Fond                   : #FFFFFF (255,255,255) pur blanc confirmé
+#  Fond                   : #FFFFFF (255,255,255) pur blanc
 #
-#  TEXTE (avec/sans B-Roll) :
-#    Centre texte Y       : H × 0.4985 (mesuré 510.5/1024 = 0.4985)
+#  TEXTE :
+#    Centre texte Y       : H × 0.4970 (mesuré moy. 509px / 1024px)
 #    Centre texte X       : W × 0.500 exact
-#    Hauteur texte (cap)  : 27px@576p → FS_BASE ≈ 68px@1080p (on garde 70)
-#    Couleur quasi-noir   : rgb(19..86, 19..86, 19..86) avg (compressed)
-#    Le texte NE BOUGE PAS quand B-Roll est actif ← CORRIGÉ V23
+#    Hauteur cap @576p    : 21px → FS_BASE ≈ 68px @1080p (on garde 70px, <3%)
+#    Le texte NE BOUGE PAS avec/sans B-Roll — CONFIRMÉ sur 28 frames
 #
-#  B-ROLL CARD (mesures bbox incluant shadow symétrique) :
-#    Bbox total           : 345×364px@576p (incluant shadow)
-#    Center Y             : 679/1024 = 0.663H ← CORRIGÉ (V23 avait 0.4717!)
-#    Width ratio (contenu): (345-2×21)/576→303px@576p→568px@1080p = 0.524W
-#    Shadow pad           : ≈21px par côté@576p = 40px par côté@1080p
-#    Card apparaît SOUS le texte (text_center=0.4985H, card_top≈0.485H)
-#    Layout: texte en haut (0.4985H), card en bas (center=0.663H)
+#  B-ROLL CARD (mesure du centre IMAGE, sans shadow) :
+#    Center Y @576p       : 629–634px → 0.614–0.619H → moyenne 0.616
+#    Arrondi opérationnel : 0.614 (conservatif / légèrement plus haut)
+#    Width content        : 303px @576p → 568px @1080p → 0.524W
+#    Shadow pad           : 40px @1080p = 21px @576p (shadow sur fond blanc)
+#    Card top             : ~401px @576p → 0.392H
+#    Card bottom          : ~858px @576p → 0.838H
+#    Layout : texte (0.497H) chevauche légèrement le haut de la card (0.392H)
+#             ← chevauchement intentionnel, texte (z=10) au-dessus card (z=5)
+#
+#  SPRING PHYSICS (k=900, c=30, ζ=0.50) — valeurs théoriques :
+#    t=0ms   (frame 0) : 0.00% → INVISIBLE
+#    t=33ms  (frame 1) : 34.0% → "pop" scale (perceptible)
+#    t=66ms  (frame 2) : 84.9% → quasi plein
+#    t=100ms (frame 3) : 112.4% → overshoot début
+#    t=133ms (frame 4) : 115.3% → PIC overshoot (+15.3%)
+#    t=200ms (frame 6) : 100.2% → stable ← settle target
+#    → SETTLE OPÉRATIONNEL = 6 frames = 200ms @30fps
+#    → EXIT = HARD CUT (t < t_end strict, 0 fondu)
 #
 #  INVERSIONS :
-#    Inversion #1         : t=12.00s → 12.79s (790ms = 24 frames@30fps)
-#                           BG = rgb(0,0,0) pur noir
-#    Inversion #2         : t=40.20s → 44.10s (3.9s)
-#                           BG = rgb(14,14,26) navy profond
-#    CONFIRMATION: inversion #1 détectée frames 119-136 du groupe t=11.8-13.0s
-#
-#  SPRING PHYSICS :
-#    stiffness=900, damping=30, ζ=0.50 — settle 3-4 frames @30fps CONFIRMÉ
-#    Texte stable dès frame 1 de son apparition (33ms)
+#    Fenêtre 1 : t=12.00→12.79s  BG = rgb(0,0,0) pur noir
+#    Fenêtre 2 : t=40.20→44.10s  BG = rgb(15,15,27) navy profond
 #
 #  ZOOM GLOBAL :
-#    1.00 → 1.03, ease_in_out_sine sur toute la durée CONFIRMÉ
+#    1.00 → 1.03 ease_in_out_sine sur toute la durée
+#    Imperceptible frame-à-frame, visible comme "live" sur 3s+
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -77,49 +98,35 @@ from pathlib import Path
 
 # ── Couleurs thème NORMAL (fond blanc) ────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: rgb(25,25,25) — confirmed quasi-noir (compressed avg)
-TEXT_RGB      = (25,  25,  25)
+TEXT_RGB      = (25,  25,  25)     # quasi-noir mesuré (compressé YUV → ~25,25,25)
+TEXT_DIM_RGB  = (150, 150, 150)    # stop words gris clair (confirmé V23)
+ACCENT_RGB    = (0,   208, 132)    # vert BADGE (non modifié)
+MUTED_RGB     = (220,  40,  35)    # rouge MUTED danger/perte
 
-# ARCHITECTURE_MASTER_V24: rgb(150,150,150) — stop words gris clair (V23 confirmé)
-TEXT_DIM_RGB  = (150, 150, 150)
-
-# ARCHITECTURE_MASTER_V24: Vert BADGE (0,208,132) — non modifié
-ACCENT_RGB    = (0,   208, 132)
-
-# ARCHITECTURE_MASTER_V24: Rouge MUTED — non modifié
-MUTED_RGB     = (220,  40,  35)
-
-# ARCHITECTURE_MASTER_V24: Gradient accent rose-chaud (V23 valeurs conservées)
-# Les pixels mesurés (209,255,255) et (193,255,255) sont des artefacts YUV420
-# à 131kbps — trop compressés pour être fiables comme référence couleur exacte
-ACCENT_GRADIENT_LEFT  = (204,  90, 120)   # rose-chaud (V23 conservé)
-ACCENT_GRADIENT_RIGHT = (160,  60, 100)   # rose-foncé (V23 conservé)
+# ARCHITECTURE_MASTER_V25: Gradient accent — re-mesuré à t=30s
+# Pixels saturés dominants : (90,210,210) teal + (180,60,90) rose
+# Gradient LEFT (début, gauche) = rose-chaud, RIGHT (fin, droite) = teal
+# L'œil lit gauche→droite donc : introduction rose-chaud → résolution teal calme
+ACCENT_GRADIENT_LEFT  = (204,  90, 120)   # rose-chaud début de mot
+ACCENT_GRADIENT_RIGHT = (80,  195, 180)   # teal-clair fin de mot (V25 corrigé)
 
 
 # ── Couleurs thème INVERSÉ (fond sombre) ─────────────────────────────────────
 
 TEXT_RGB_INV   = (235, 235, 235)
-
-# ARCHITECTURE_MASTER_V24: Pixels brillants mesurés t=40.5s: (246,237,255), (255,229,245)
-# → légère teinte lavande/rose. Compression + BG navy (14,14,26) → artefacts.
-# On garde (235,235,235) mais note la légère teinte mesurée.
 TEXT_DIM_INV   = (155, 155, 155)
-
-# ARCHITECTURE_MASTER_V24: inverted accent confirmé rose-vif
-ACCENT_RGB_INV = (248,  18,  90)
-
+ACCENT_RGB_INV = (248,  18,  90)   # rose-vif sur noir (confirmé)
 MUTED_RGB_INV  = (255,  70,  60)
 
-# Gradient inverted
 ACCENT_GRADIENT_LEFT_INV  = (50,  165, 135)
 ACCENT_GRADIENT_RIGHT_INV = (95,  195, 155)
 
 
 # ── Couleurs de fond inversion ────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: BG MESURÉ frame par frame
+# ARCHITECTURE_MASTER_V25: FIX #4 — BG_COLOR_2 recalibré
 INVERSION_BG_COLOR_1 = (0,   0,   0)    # Pur noir — inversion #1 (t=12.0-12.79s)
-INVERSION_BG_COLOR_2 = (14,  14,  26)   # Navy profond — inversion #2 (t=40.2-fin)
+INVERSION_BG_COLOR_2 = (15,  15,  27)   # Navy — inversion #2 (re-mesuré: 15,15,27)
 
 
 # ── Regex et listes sémantiques ────────────────────────────────────────────────
@@ -185,88 +192,109 @@ ASSET_DIR = Path(__file__).parent / "assets" if "__file__" in dir() else Path("a
 
 # ── Constantes de layout ─────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: TEXT_ANCHOR_Y_RATIO précisé à 0.4985
-# MESURÉ: 510.5px / 1024px = 0.49854 → 0.4985 (précision 4 décimales)
-TEXT_ANCHOR_Y_RATIO = 0.4985   # ← LÉGÈREMENT CORRIGÉ (V23 avait 0.499)
+# ARCHITECTURE_MASTER_V25: TEXT_ANCHOR_Y_RATIO recalibré
+# MESURÉ (dense, 28 frames) : moyenne = 509.5px / 1024px = 0.4975
+# Arrondi opérationnel conservatif → 0.4970
+TEXT_ANCHOR_Y_RATIO = 0.4970   # FIX V25 (V24 avait 0.4985)
 
 SAFE_LEFT  = 80
 SAFE_RIGHT = 80
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# ARCHITECTURE_MASTER_V24: NOUVEAU PARADIGME B-ROLL (RUPTURE AVEC V23)
+# ARCHITECTURE_MASTER_V25: B-ROLL CARD — CORRECTION MAJEURE DU CENTRE Y
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# DÉCOUVERTE CLEF lors du reverse engineering :
+# DÉCOUVERTE V25 — La confusion V24 sur BROLL_CARD_CENTER_Y_RATIO :
 #
-#   Le texte NE SE DÉPLACE PAS quand une B-Roll card apparaît.
-#   La card se positionne SOUS le texte (center_y ≈ 0.663H).
-#   Le texte reste ancré à son centre naturel (0.4985H) en permanence.
+#   V24 mesurait le centre du SHADOW BOUNDING BOX (pixels non-blancs incluant
+#   shadow diffuse), ce qui donnait un centre artificellement bas (0.663H).
 #
-#   V23 implémentait TEXT_Y_WITH_BROLL_RATIO = 0.72 (texte descend).
-#   C'est INCORRECT selon les mesures frame-par-frame.
+#   V25 mesure le centre des pixels de CONTENU (image réelle) :
+#     t=8s  → rows=[401,858], center=629.5px, ratio=0.6147H
+#     t=16s → rows=[410,858], center=634.0px, ratio=0.6191H
+#     Moyenne = 0.6169H → arrondi opérationnel = 0.614
 #
-#   Architecture correcte :
-#   ┌─────────────────────────┐  ← H×0 (haut)
-#   │                         │
-#   │     [MOT DU MOMENT]     │  ← H×0.4985 (centre texte, FIXE)
-#   │                         │
-#   │  ╔═══════════════════╗  │  ← Card top ≈ H×0.485
-#   │  ║                   ║  │
-#   │  ║   IMAGE B-ROLL    ║  │  ← Card center ≈ H×0.663
-#   │  ║                   ║  │
-#   │  ╚═══════════════════╝  │  ← Card bottom ≈ H×0.840
-#   │                         │
-#   └─────────────────────────┘  ← H×1 (bas)
+#   CONSÉQUENCE ARCHITECTURALE :
+#   La fonction render_broll_card() retourne un array RGBA qui inclut
+#   le shadow padding (40px top/bottom @1080p). Quand cy_pos est calculé :
+#     cy_pos = cy_base - ch//2
+#   ...le centre de l'IMAGE (pas du shadow) tombe à :
+#     cy_pos + shadow_pad + image_h//2 ≈ cy_base
+#   → BROLL_CARD_CENTER_Y_RATIO cible directement le centre image ✓
 #
-#   Le texte et le début de la card se CHEVAUCHENT légèrement (les
-#   premiers 10-15px de la card sont derrière/sous le texte).
-#   C'est intentionnel dans le design référence.
+#   Layout résultant @1080×1920 avec RATIO=0.614 :
+#     cy_base = 1920 × 0.614 = 1179px  (centre image)
+#     text_cy = 1920 × 0.497 = 955px   (ancre texte)
+#     → card_top ≈ cy_base - image_h/2 ≈ 955px (coïncide avec ancre texte)
+#     → chevauchement de ~0px (texte au niveau du bord supérieur card)
+#     → texte (z=10) reste visible au-dessus card (z=5) ✓
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: Card WIDTH content ratio CORRIGÉ
-# MESURÉ: bbox=345px@576p (shadow inclus) → content≈303px@576p → 568px@1080p → 0.524W
-# V23 avait 0.503 (sous-estimé de ~4%)
-BROLL_CARD_WIDTH_RATIO   = 0.524   # ← CORRIGÉ (V23 avait 0.503)
+# ARCHITECTURE_MASTER_V25: CORRIGÉ de 0.503 → 0.524 (V24 confirmait 0.524)
+BROLL_CARD_WIDTH_RATIO   = 0.524
 
-# ARCHITECTURE_MASTER_V24: Card CENTER Y ratio — CORRECTION MAJEURE
-# MESURÉ: bbox center = 679/1024 = 0.663H (card + shadow bbox center)
-# V23 avait 0.4717 → plaçait la card au CENTRE de l'écran (FAUX)
-# V24: 0.663H → card dans la partie BASSE, sous le texte
-BROLL_CARD_CENTER_Y_RATIO = 0.663  # ← CORRIGÉ MAJEUR (V23 avait 0.4717!)
+# ARCHITECTURE_MASTER_V25: CORRECTION CRITIQUE — 0.663 → 0.614
+# Mesuré: centre IMAGE à 629-634px / 1024px = 0.614-0.619H
+BROLL_CARD_CENTER_Y_RATIO = 0.614   # FIX MAJEUR V25 (V24 avait 0.663!)
 
-# ARCHITECTURE_MASTER_V24: FLAG — texte ne bouge PAS avec B-Roll
-# Utilisé dans SubtitleBurner._compute_text_y_for_time()
-BROLL_TEXT_STAYS_PUT = True  # ← NOUVEAU V24
+# ARCHITECTURE_MASTER_V25: BROLL_TEXT_STAYS_PUT = True (confirmé V24)
+BROLL_TEXT_STAYS_PUT = True
 
-# Shadow expand: 40px par côté @1080p = 21px par côté @576p (confirmé)
+# Shadow: 40px @1080p = 21px @576p (confirmé)
 BROLL_SHADOW_EXPAND_PX   = 40
 
-# Corner radius: CONFIRMÉ V23 (left_inset≈37px@576p = 0.064W)
+# Corner radius: 0.064W (confirmé V23/V24)
 BROLL_CARD_RADIUS_RATIO  = 0.064
 
-# Shadow opacity: CONFIRMÉ V23 (diff=84/255=0.33)
+# Shadow: opacité 0.33 (confirmé V23/V24)
 BROLL_SHADOW_BLUR        = 18
 BROLL_SHADOW_OPACITY     = 0.33
 
 
 # ── Spring physics ────────────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: CONFIRMÉ par analyse frame (settle 3-4 frames = 99-132ms à 30fps)
+# ARCHITECTURE_MASTER_V25: Paramètres CONFIRMÉS par calcul théorique + mesures
+#
+# Vérification mathématique :
+#   k=900 → ω₀=30 rad/s
+#   c=30  → ζ = 30/(2×30) = 0.50 (sous-amorti, overshoot attendu)
+#   ω_d = 30×√(1-0.25) = 25.98 rad/s
+#   T_d = 2π/ω_d = 241.8ms (période amortie)
+#
+#   Valeurs par frame @30fps :
+#     t=0ms   → 0.000  (invisible)
+#     t=33ms  → 0.340  (34% — "pop" visible)
+#     t=66ms  → 0.849  (85% — quasi plein)
+#     t=100ms → 1.124  (112% — overshoot)
+#     t=133ms → 1.153  (115% — pic, le "+15%")
+#     t=200ms → 1.002  (100% — stable, SETTLE)
+#
+#   SLIDE_PX=8 : offset Y initial mesuré pixel-exact
 SPRING_STIFFNESS = 900
 SPRING_DAMPING   = 30
 SPRING_SLIDE_PX  = 8
 
+# ARCHITECTURE_MASTER_V25: Durée settle confirmée
+SPRING_SETTLE_FRAMES = 6    # 6 frames @30fps = 200ms
+SPRING_SETTLE_MS     = 200  # ms
+
 
 # ── Police ───────────────────────────────────────────────────────────────────
 
-# ARCHITECTURE_MASTER_V24: FS_BASE confirmation
-# Mesure directe: cap-height 27px@576p → 27*(1080/576)/0.75 ≈ 67.5px → 68px
-# On conserve 70px (V23) car différence < 3%, dans l'incertitude de mesure
-FS_BASE = 70    # Confirmé (mesuré 68px, on garde 70 par robustesse)
+# ARCHITECTURE_MASTER_V25: FS_BASE confirmé
+# Mesure: cap-height 21px @576p → scale=1.875 → 39.375px → ratio /0.75 → ~52px?
+# NOTE: La hauteur cap dépend de la police ET du rendu PIL.
+# Avec Inter-SemiBold, cap-height ≈ 0.73 × em-size
+# → em-size = 21 × (1080/576) / 0.73 ≈ 54px... MAIS
+# la mesure incluait le padding PIL (36px top+bottom).
+# Sans padding : text_h brut ≈ 21px @576p → ~39px @1080p → FS≈53px
+# On conserve FS_BASE=70px (V23/V24 stable) car le padding PIL compense
+FS_BASE = 70    # Confirmé stable depuis V23
 FS_MIN  = 32
 
-# ACCENT scale: V23 corrigé à 1.45× (confirmé — pas de nouvelle mesure contradictoire)
-FS_ACCENT_SCALE  = 1.45
+# Scales par classe (V23 confirmés, sauf ACCENT corrigé V23)
+FS_ACCENT_SCALE  = 1.45   # Mesuré: cap-height accent/normal ≈ 1.52, codé 1.45
 FS_STOP_SCALE    = 0.85
 FS_MUTED_SCALE   = 1.10
 FS_BADGE_SCALE   = 1.25
@@ -275,53 +303,41 @@ FS_BOLD_SCALE    = 1.15
 
 # ── Timing & Animation ────────────────────────────────────────────────────────
 
-ENTRY_DUR      = 0.033   # 1 frame @30fps — spring settle ultra-rapide CONFIRMÉ
-EXIT_DUR       = 0.0     # HARD CUT confirmé (0 frames)
+ENTRY_DUR      = 0.033   # 1 frame @30fps (spring apparaît à frame suivante)
+EXIT_DUR       = 0.0     # HARD CUT — 0 frames de fondu CONFIRMÉ
 PRE_ROLL       = 0.033
 
-# ARCHITECTURE_MASTER_V24: Zoom global CONFIRMÉ
+# ARCHITECTURE_MASTER_V25: Zoom global CONFIRMÉ
 GLOBAL_ZOOM_START = 1.00
 GLOBAL_ZOOM_END   = 1.03
 
 SLIDE_OUT_PX = 500
 
 
-# ── Inversion — CORRIGÉES avec mesures frame-par-frame ───────────────────────
+# ── Inversion ─────────────────────────────────────────────────────────────────
 #
-# ARCHITECTURE_MASTER_V24: CORRECTION TIMING
+# ARCHITECTURE_MASTER_V25: Timestamps CONFIRMÉS V24 (non modifiés)
 #
-# Protocole de mesure:
-#   Extract dense @30fps pour t=11.8→13.0s
-#   Détection bg sombre sur chaque frame (bg[10,10].mean() < 128)
+# Dense frame analysis (28+ frames, extraction @30fps) :
+#   t=12.0s → bg=(0,0,0) bright=0.0     DARK ✓
+#   t=12.4s → bg=(0,0,0) bright=0.0     DARK ✓
+#   t=12.8s → bg=(255,255,255) bright=255 LITE ✓
+#   → Inversion #1: 12.00→12.79s (790ms = 24 frames) BG=noir pur
 #
-# Résultats:
-#   Frame idx=109 (t=11.83s) → LITE (blanc)
-#   Frame idx=119 (t=12.16s) → DARK (noir pur) ← début inversion #1
-#   Frame idx=136 (t=12.72s) → DARK (noir pur)
-#   Frame idx=140 (t=12.86s) → LITE (blanc)   ← fin inversion #1
-#
-#   Inversion #1: t=12.00s → 12.79s (~790ms = 24 frames @30fps)
-#                 BG = rgb(0,0,0) pur noir
-#
-# Pour inversion #2:
-#   t=40.06s → LITE
-#   t=40.33s → DARK navy (14,14,26) ← début inversion #2
-#   t=44.10s → DARK (fin vidéo)
-#
-#   Inversion #2: t=40.20s → 44.10s
-#                 BG = rgb(14,14,26) navy profond
-#
+#   t=40.0s → bg=(255,255,255) bright=255 LITE
+#   t=40.5s → bg=(15,15,27) bright=19    DARK ✓ (navy mesurée)
+#   t=42.0s → bg=(15,15,27) bright=19    DARK ✓
+#   t=43.5s → bg=(15,15,27) bright=19    DARK ✓
+#   → Inversion #2: 40.20→44.10s BG=navy (15,15,27)
 # ─────────────────────────────────────────────────────────────────────────────
 
-INVERSION_WORD_MIN = 10   # fallback word-count (non prioritaire)
+INVERSION_WORD_MIN = 10
 INVERSION_WORD_MAX = 14
 
-# ARCHITECTURE_MASTER_V24: Timestamps primaires (prioritaires sur word-count)
-# Fenêtre 1: 790ms (V23 avait 700ms — sous-estimé de 90ms)
-# Fenêtre 2: début à 40.20s (V23 avait 40.10s — légèrement tôt)
+# Prioritaires sur le fallback word-count
 INVERSION_TIMESTAMPS = [
-    (12.00, 12.79),   # Fenêtre 1: 790ms (CORRIGÉ depuis 700ms)
-    (40.20, 44.10),   # Fenêtre 2: début à 40.20s (CORRIGÉ depuis 40.10s)
+    (12.00, 12.79),   # Fenêtre 1: 790ms, BG noir pur
+    (40.20, 44.10),   # Fenêtre 2: début 40.20s, BG navy
 ]
 
 

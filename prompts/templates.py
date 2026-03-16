@@ -207,42 +207,49 @@ RÈGLES DE PRODUCTION — PREMIUM MOTION V6 (RESPECTE CHAQUE POINT)
    Pour les transitions douces dans le même argument : TRANSITION: FADE
 
 ═══════════════════════════════════════════════════════════════
-FORMAT DE RÉPONSE (Utilise cette STRUCTURE EXACTE, mais rédige un contenu 100% NOUVEAU basé sur le sujet demandé)
+FORMAT DE RÉPONSE ATTENDU
+Génère un contenu 100% ORIGINAL basé sur le sujet "{user_topic}".
+Utilise EXACTEMENT cette structure, en commençant par "=== DEBUT SCRIPT ===".
+Les numéros de scènes commencent à SCENE 1 et vont jusqu'à SCENE 40-50.
 ═══════════════════════════════════════════════════════════════
 
-=== DEBUT SCRIPT ===
-TITRE: [Titre accrocheur de la vidéo]
-TAGS: [tag1, tag2, tag3]
+⚠️  SCHÉMA DE STRUCTURE (NE PAS COPIER — REMPLACER PAR TON CONTENU RÉEL) :
 
-SCENE 1
-TEXTE: [LIGHT]Votre phrase [BOLD]d'accroche ici
+─── SCHÉMA-SCENE-A ───
+TEXTE: [LIGHT]MOT_LIAISON [BOLD]MOT_IMPACT
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
-SCENE 2
-TEXTE: [BOLD]La suite de votre idée
+─── SCHÉMA-SCENE-B ───
+TEXTE: [BOLD]MOT_FORT
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
-SCENE 3
-TEXTE: [LIGHT]un point fort.
-VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: SWOOSH
-
-SCENE 4
+─── SCHÉMA-SCENE-C ───
 TEXTE: [PAUSE]
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: SILENCE
 
-SCENE 5
-TEXTE: [LIGHT]La [BOLD]raison ?
+─── SCHÉMA-SCENE-D ───
+TEXTE: [BADGE]CHIFFRE_CLE
 VISUEL: TRANSITION: SLIDE
+OVERLAY: CLICK_DEEP
+
+⚠️  FIN DU SCHÉMA — TON SCRIPT RÉEL COMMENCE CI-DESSOUS ───
+
+=== DEBUT SCRIPT ===
+TITRE: [Titre accrocheur basé sur {user_topic}]
+TAGS: [tag1, tag2, tag3]
+
+SCENE 1
+TEXTE: [premier mot ou groupe de mots de ton vrai script sur {user_topic}]
+VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
-SCENE 6
-TEXTE: [BADGE]ChiffreClé
+SCENE 2
+TEXTE: [deuxième mot ou groupe de mots]
 VISUEL: FOND BLANC #FFFFFF STRICT
-OVERLAY: CLICK_DEEP
+OVERLAY: CLICK
 
 ... (Continue jusqu'à SCENE 40-50, termine avec un CTA fort)
 === FIN SCRIPT ===
