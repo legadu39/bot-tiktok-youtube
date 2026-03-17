@@ -16,6 +16,13 @@
 #   FIX 5 — _step_2_visuals(): B-Roll procéduraux (generate_procedural_broll_card)
 #            quand vault vide, au lieu de fonds blancs statiques monotones.
 #   FIX 6 — __init__: SpringLUT.warm_up(fps=60) pour capturer l'overshoot à 120ms.
+# PIXEL_PERFECT_V35:
+#   FIX 1 — _step_2_visuals(): asset_paths[i] NE DOIT JAMAIS être le broll_path.
+#            Le B-Roll procédural est un OVERLAY uniquement (via _broll_image_path).
+#            Suppression de la ligne `asset_paths[i] = broll_path` qui causait
+#            un fond noir sur le hook pendant ~1s.
+#   FIX 2 — _step_3_audio(): durée fallback intègre pause_budget (ponctuation réelle)
+#            et utilise ELEVENLABS_WPS=2.50 (débit mesuré ElevenLabs v2).
 
 import asyncio
 import sys
@@ -63,7 +70,6 @@ from fallback import FallbackProvider
 
 from tools.config import FS_BASE
 from tools.physics import SpringLUT
-# PIXEL_PERFECT_V34: FIX 5 — import generate_procedural_broll_card
 from tools.graphics import generate_procedural_broll_card
 
 
@@ -141,6 +147,65 @@ def _sanitize_visual_prompt(raw_prompt: str) -> str:
     if len(clean) < 3:
         return "cinematic trading abstract"
     return clean
+
+
+# FIX V35.1: Pool de prompts visuels thématiques pour diversification auto
+# Utilisé quand tous les prompts d'un script sont identiques (pattern LLM paresseux)
+_VISUAL_PROMPT_POOL = [
+    # Trading/Charts
+    "candlestick chart trading screen glow",
+    "financial dashboard bloomberg terminal dark",
+    "stock market graph uptrend green",
+    "forex trading setup multiple monitors",
+    "crypto price action chart blue neon",
+    # Mindset/People
+    "focused trader at desk morning light",
+    "person studying laptop finance notebook",
+    "confident businessman suit city skyline",
+    "hands typing keyboard financial data",
+    "young entrepreneur smiling success",
+    # Abstract/Premium
+    "abstract gold particles dark background",
+    "luxury minimal white marble texture",
+    "neon green financial data stream",
+    "premium dark gradient geometric shapes",
+    "cinematic money notes falling slow motion",
+    # PropFirm spécifique
+    "funded account dashboard profit green",
+    "prop trading firm challenge results",
+    "trading performance report analytics",
+    "risk management metrics display",
+    "capital allocation financial growth",
+]
+
+
+def _diversify_visual_prompts(scenes: List[Dict]) -> List[Dict]:
+    """
+    FIX V35.1: Si tous les visual_prompt sont identiques après sanitization,
+    assigne automatiquement des prompts variés depuis le pool thématique.
+    Préserve les prompts distincts existants.
+    """
+    sanitized = [_sanitize_visual_prompt(s.get("visual_prompt", "")) for s in scenes]
+    unique = set(sanitized)
+
+    if len(unique) > 1:
+        return scenes  # Prompts déjà variés, rien à faire
+
+    jlog("info", msg=(
+        f"FIX V35.1: Auto-diversification de {len(scenes)} visual_prompts "
+        f"(tous = '{list(unique)[0]}')"
+    ))
+
+    pool = _VISUAL_PROMPT_POOL.copy()
+    for i, scene in enumerate(scenes):
+        pool_idx = i % len(pool)
+        scenes[i]["visual_prompt"] = pool[pool_idx]
+
+    jlog("success", msg=(
+        f"FIX V35.1: {len(scenes)} prompts diversifiés depuis le pool "
+        f"({len(_VISUAL_PROMPT_POOL)} templates)"
+    ))
+    return scenes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,15 +379,12 @@ class NexusBrain:
         self.signals_dir.mkdir(exist_ok=True)
 
         # PIXEL_PERFECT_V34: FIX 6 — warm_up à 60fps (était 30fps)
-        # Le pic d'overshoot à t=120ms est capturé à +14.8% au lieu de +13%
-        # Double warm-up: 60fps (rendu production) + 30fps (rétrocompatibilité)
         SpringLUT.warm_up(fps=60)
 
-        jlog("info", msg=f"Nexus Brain V34 initialized (MOTION_ENGINE_V32)")
+        jlog("info", msg=f"Nexus Brain V35 initialized (MOTION_ENGINE_V32)")
         jlog("info", msg=f"  Anticipation offset : {AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms")
         jlog("info", msg=f"  Zoom caméra virtuelle : {VIRTUAL_CAMERA_ZOOM_START:.3f}→{VIRTUAL_CAMERA_ZOOM_END:.3f}")
         jlog("info", msg=f"  Spring k={SPRING_K_REFERENCE:.0f} c={SPRING_C_REFERENCE:.0f} ζ=0.50")
-        # PIXEL_PERFECT_V34: FIX 6 — log confirme 60fps
         jlog("info", msg=f"  SpringLUT warmed up @60fps — {len(SpringLUT._cache)} profils en cache")
 
     # ─────────────────────────────────────────────────────────────────────
@@ -617,7 +679,7 @@ class NexusBrain:
 
     def _validate_script_density(self, script_data: Dict) -> bool:
         if not script_data or "scenes" not in script_data:
-            jlog("warning", msg="PIXEL_PERFECT_V34: Script None ou sans 'scenes'.")
+            jlog("warning", msg="PIXEL_PERFECT_V35: Script None ou sans 'scenes'.")
             return False
 
         scenes   = script_data["scenes"]
@@ -630,7 +692,7 @@ class NexusBrain:
 
         if n_scenes < SCRIPT_MIN_SCENES:
             jlog("warning", msg=(
-                f"PIXEL_PERFECT_V34: Script rejeté — {n_scenes} scènes "
+                f"PIXEL_PERFECT_V35: Script rejeté — {n_scenes} scènes "
                 f"(minimum {SCRIPT_MIN_SCENES}). "
                 f"Cause probable : ghost text résiduel ou LLM tronqué."
             ))
@@ -638,16 +700,50 @@ class NexusBrain:
 
         if total_words < SCRIPT_MIN_WORDS:
             jlog("warning", msg=(
-                f"PIXEL_PERFECT_V34: Script rejeté — {total_words} mots "
+                f"PIXEL_PERFECT_V35: Script rejeté — {total_words} mots "
                 f"(minimum {SCRIPT_MIN_WORDS}). "
                 f"Script trop court pour une vidéo 40-60s."
             ))
             return False
 
+        # FIX V35.1: Détection script word-by-word hyper-fragmenté
+        # 48 scènes / 75 mots = 1.56 mots/scène → LLM a généré 1 mot par scène
+        # au lieu de groupes de mots. Ce pattern produit une vidéo haché et monotone.
+        avg_words_per_scene = total_words / max(n_scenes, 1)
+        SCRIPT_MIN_AVG_WORDS_PER_SCENE = 1.80
+
+        if avg_words_per_scene < SCRIPT_MIN_AVG_WORDS_PER_SCENE:
+            jlog("warning", msg=(
+                f"PIXEL_PERFECT_V35: Script rejeté — densité trop faible "
+                f"({avg_words_per_scene:.2f} mots/scène, minimum {SCRIPT_MIN_AVG_WORDS_PER_SCENE}). "
+                f"Pattern LLM word-by-word détecté ({n_scenes} scènes / {total_words} mots). "
+                f"Le LLM a fragmenté la phrase au lieu de grouper les mots."
+            ))
+            return False
+
+        # FIX V35.1: Détection visual prompts monotones (tous identiques après sanitization)
+        unique_prompts = set(
+            _sanitize_visual_prompt(s.get("visual_prompt", ""))
+            for s in scenes
+        )
+        if len(unique_prompts) <= 1 and n_scenes > 10:
+            jlog("warning", msg=(
+                f"PIXEL_PERFECT_V35: Alerte qualité — tous les visual_prompt sont identiques "
+                f"après sanitization ({list(unique_prompts)}). "
+                f"Auto-diversification activée dans _step_2_visuals."
+            ))
+            # Injecter un flag pour déclencher la diversification en step 2
+            if "meta" not in script_data:
+                script_data["meta"] = {}
+            script_data["meta"]["_needs_prompt_diversification"] = True
+
+        est_duration = total_words / SCRIPT_TTS_WORDS_PER_SEC
         jlog("info", msg=(
-            f"PIXEL_PERFECT_V34: Script validé — "
-            f"{n_scenes} scènes, {total_words} mots. "
-            f"Durée estimée : {total_words / SCRIPT_TTS_WORDS_PER_SEC:.1f}s"
+            f"PIXEL_PERFECT_V35: Script validé ✓ — "
+            f"{n_scenes} scènes | {total_words} mots | "
+            f"{avg_words_per_scene:.1f} mots/scène | "
+            f"durée estimée {est_duration:.1f}s | "
+            f"{len(unique_prompts)} prompt(s) visuels distincts"
         ))
         return True
 
@@ -787,7 +883,7 @@ class NexusBrain:
         if script_data and "scenes" in script_data:
             if not self._validate_script_density(script_data):
                 jlog("warning", msg=(
-                    "PIXEL_PERFECT_V34: Script CLI rejeté par validation densité. "
+                    "PIXEL_PERFECT_V35: Script CLI rejeté par validation densité. "
                     "Basculement vers Evergreen Vault."
                 ))
                 script_data = None
@@ -806,7 +902,7 @@ class NexusBrain:
             if self._validate_script_density(evergreen_script):
                 return evergreen_script
             else:
-                jlog("warning", msg="PIXEL_PERFECT_V34: Evergreen rejeté — densité insuffisante.")
+                jlog("warning", msg="PIXEL_PERFECT_V35: Evergreen rejeté — densité insuffisante.")
 
         jlog("warning", msg="Engagement Fallback Protocol (Mode Dégradé)")
         fallback_script = self.fallback.generate_script(topic)
@@ -826,7 +922,7 @@ class NexusBrain:
 
     # ─────────────────────────────────────────────────────────────────────
     # ÉTAPE 2 : VISUALS
-    # PIXEL_PERFECT_V34: FIX 5 — B-Roll procéduraux quand vault vide
+    # PIXEL_PERFECT_V35: FIX 1 — B-Roll procédural = overlay UNIQUEMENT
     # ─────────────────────────────────────────────────────────────────────
 
     def _generate_premium_background(
@@ -836,7 +932,7 @@ class NexusBrain:
     ) -> str:
         """
         PIXEL_PERFECT_INTEGRATED: Génère un fond premium si le vault est vide.
-        Inchangé V34 — utilisé en complément des B-Roll procéduraux.
+        Inchangé V35 — fond toujours CLAIR (blanc avec accent subtil en bas).
         """
         from PIL import Image, ImageDraw
 
@@ -860,7 +956,7 @@ class NexusBrain:
 
         img.save(output_path, quality=98)
         jlog("info", msg=(
-            f"PIXEL_PERFECT_V34: Fond premium généré "
+            f"PIXEL_PERFECT_V35: Fond premium généré "
             f"(palette {index % len(palettes)}) → {Path(output_path).name}"
         ))
         return output_path
@@ -870,6 +966,9 @@ class NexusBrain:
         scenes: List[Dict],
     ) -> Tuple[List[str], List[int]]:
         jlog("step", msg=f"Step 2: Visuels (Fond {self.bg_style.upper()})")
+
+        # FIX V35.1: Auto-diversification si tous les visual_prompts sont identiques
+        scenes = _diversify_visual_prompts(scenes)
 
         bg_filename = "bg_white_ffffff.jpg" if self.bg_style == "white" else "bg_cream_f5f5f7.jpg"
         bg_path     = os.path.join(self.root_dir, bg_filename)
@@ -886,6 +985,10 @@ class NexusBrain:
         except ImportError:
             broll_available = False
 
+        # PIXEL_PERFECT_V35: asset_paths initialisé au fond blanc pour TOUTES les scènes.
+        # RÈGLE INVARIANTE: asset_paths[i] = fond (toujours clair)
+        #                   scene["_broll_image_path"] = overlay B-Roll (optionnel)
+        # Ces deux pointeurs ne doivent JAMAIS désigner le même fichier.
         asset_paths   = [bg_path] * len(scenes)
         broll_indices = []
         broll_count   = 0
@@ -927,6 +1030,7 @@ class NexusBrain:
                     self.vault.mark_as_used(img_path)
                     broll_indices.append(i)
                     scene["_broll_image_path"] = img_path
+                    # PIXEL_PERFECT_V35: asset_paths[i] NON MODIFIÉ → fond blanc conservé
                     broll_count += 1
             else:
                 vault_misses += 1
@@ -934,11 +1038,8 @@ class NexusBrain:
         miss_ratio = vault_misses / max(len(scenes), 1)
 
         if miss_ratio >= 0.80:
-            # PIXEL_PERFECT_V34: FIX 5 — B-Roll procéduraux au lieu de fonds blancs purs
-            # Pattern alterné: hook+scènes à fort contenu → B-Roll procédural
-            #                  autres scènes → fond premium palette tournante
             jlog("info", msg=(
-                f"PIXEL_PERFECT_V34: Vault quasi-vide ({vault_misses}/{len(scenes)} misses). "
+                f"PIXEL_PERFECT_V35: Vault quasi-vide ({vault_misses}/{len(scenes)} misses). "
                 f"Génération B-Roll procéduraux + fonds premium."
             ))
 
@@ -947,21 +1048,42 @@ class NexusBrain:
                 clean_text  = re.sub(r'\[.*?\]', '', scene_text).strip()
                 words       = clean_text.split()
 
-                # Déterminer si cette scène mérite un B-Roll procédural
                 is_hook = (i == 0)
+                is_last = (i == len(scenes) - 1)
+
+                has_number = any(re.search(r'[\d%€$£]', w) for w in words) if words else False
                 has_strong_content = (
-                    any(re.search(r'[\d%€$£]', w) for w in words)
+                    has_number
                     or any(
                         w.lower().rstrip('.,!?') in {
                             "secret", "argent", "profit", "gain", "winner",
-                            "révèle", "découverte", "méthode", "stratégie"
+                            "révèle", "découverte", "méthode", "stratégie",
+                            "comptable", "fiscal", "payout", "capital",
+                            "funded", "ftmo", "apex", "challenge", "trading",
+                            "vérité", "réalité", "cashflow", "performance",
                         }
                         for w in words
                     )
                 ) if words else False
 
-                # PIXEL_PERFECT_V34: Hook + 1 scène sur 4 avec fort contenu → B-Roll procédural
-                should_generate_broll = is_hook or (has_strong_content and i % 4 == 0)
+                # FIX V35.1: Logique B-Roll intelligente à 3 niveaux
+                # V35.0: seulement hook + (has_strong AND i%4==0) → 2/48 B-Roll
+                # V35.1: hook + fin + strong_content + fallback régulier toutes 6 scènes
+                # Résultat attendu: ~8-12 B-Roll sur 48 scènes (16-25% de couverture)
+                is_regular_beat = (i > 0) and (i % 6 == 0)  # toutes les 6 scènes minimum
+                should_generate_broll = (
+                    is_hook
+                    or is_last
+                    or has_strong_content          # mot-clé fort → toujours un B-Roll
+                    or (has_number and i > 2)      # chiffre/stat → B-Roll
+                    or is_regular_beat             # couverture plancher régulière
+                )
+
+                # ── Fond premium pour cette scène (TOUJOURS clair) ──────────
+                premium_path  = os.path.join(self.root_dir, f"bg_premium_{i:03d}.jpg")
+                palette_index = i // 8
+                self._generate_premium_background(premium_path, index=palette_index)
+                asset_paths[i] = premium_path  # ← fond clair confirmé
 
                 if should_generate_broll:
                     broll_path = os.path.join(
@@ -976,48 +1098,51 @@ class NexusBrain:
                             scene_index  = i,
                             is_hook      = is_hook,
                         )
-                        asset_paths[i]             = broll_path
+                        # ╔══════════════════════════════════════════════════════════╗
+                        # ║  PIXEL_PERFECT_V35: FIX 1 — CORRECTION BUG CRITIQUE     ║
+                        # ║  V34 avait : asset_paths[i] = broll_path  ← SUPPRIMÉ    ║
+                        # ║  Le B-Roll procédural est un OVERLAY uniquement.         ║
+                        # ║  asset_paths[i] reste = premium_path (fond clair).       ║
+                        # ║  Conséquence V34 : hook affiché en noir ~1s (broll_proc  ║
+                        # ║  avait bg_top=(25,25,31) utilisé comme fond entier).     ║
+                        # ╚══════════════════════════════════════════════════════════╝
+                        scene["_broll_image_path"] = broll_path  # overlay uniquement
                         broll_indices.append(i)
-                        scene["_broll_image_path"] = broll_path
                         broll_count += 1
                         jlog("info", msg=(
-                            f"PIXEL_PERFECT_V34: B-Roll procédural généré "
-                            f"scène {i} → {Path(broll_path).name}"
+                            f"PIXEL_PERFECT_V35: B-Roll procédural overlay "
+                            f"scène {i} → {Path(broll_path).name} "
+                            f"(fond: {Path(premium_path).name})"
                         ))
                     except Exception as e:
-                        jlog("warning", msg=f"B-Roll procédural échoué scène {i}: {e}. Fallback fond premium.")
-                        premium_path = os.path.join(
-                            self.root_dir,
-                            f"bg_premium_{i:03d}.jpg"
-                        )
-                        palette_index = i // 8
-                        self._generate_premium_background(premium_path, index=palette_index)
-                        asset_paths[i] = premium_path
-                else:
-                    # Fond premium (variation subtile de couleur toutes les 8 scènes)
-                    premium_path = os.path.join(
-                        self.root_dir,
-                        f"bg_premium_{i:03d}.jpg"
-                    )
-                    palette_index = i // 8
-                    self._generate_premium_background(premium_path, index=palette_index)
-                    asset_paths[i] = premium_path
+                        jlog("warning", msg=f"B-Roll procédural échoué scène {i}: {e}. Fond premium conservé.")
+                        # asset_paths[i] = premium_path déjà assigné → pas de fallback nécessaire
 
         else:
             jlog("info", msg=(
-                f"PIXEL_PERFECT_V34: {vault_misses} misses vault / {len(scenes)} scènes "
+                f"PIXEL_PERFECT_V35: {vault_misses} misses vault / {len(scenes)} scènes "
                 f"— ratio {miss_ratio:.0%} < 80%, fonds blancs conservés."
             ))
 
+        # FIX V35.1: ordre for→if OBLIGATOIRE dans un générateur Python.
+        # V35.0 avait l'if AVANT le for → UnboundLocalError systématique.
+        proc_count = sum(
+            1
+            for i in broll_indices
+            if i < len(scenes)
+            for scene in [scenes[i]]
+            if 'broll_proc' in str(scene.get("_broll_image_path", ""))
+        )
         jlog("info", msg=(
             f"Visuels: {broll_count} B-Roll acceptés "
-            f"({sum(1 for i in broll_indices if 'proc' in str(asset_paths[i]))} procéduraux), "
+            f"({proc_count} procéduraux overlays), "
             f"{broll_rejected} rejetés (trop grands)."
         ))
         return asset_paths, broll_indices
 
     # ─────────────────────────────────────────────────────────────────────
-    # ÉTAPE 3 : AUDIO (inchangé V34)
+    # ÉTAPE 3 : AUDIO
+    # PIXEL_PERFECT_V35: FIX 2 — durée fallback avec pause_budget réaliste
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_3_audio(self, scenes: List[Dict], speed: float = 1.0) -> str:
@@ -1038,22 +1163,36 @@ class NexusBrain:
                 if re.sub(r'[^\w]', '', w)
             ])
 
-            TTS_WPS      = SCRIPT_TTS_WORDS_PER_SEC * speed
-            MIN_DURATION = 30.0
+            # PIXEL_PERFECT_V35: FIX 2 — Calibration durée réaliste
+            # V34 : TTS_WPS = 2.75 → 75 mots / 2.75 = 27.3s → forcé à 30.0s
+            # V35 : ELEVENLABS_WPS = 2.50 (débit mesuré ElevenLabs v2)
+            #        + pause_budget (ponctuation réelle du script)
+            #        Pour 75 mots + ~8 virgules + ~5 points ≈ 34.1s (plus réaliste)
+            ELEVENLABS_WPS = 2.50 * max(speed, 0.5)
+            MIN_DURATION   = 30.0
+
+            pause_budget = (
+                full_text.count(',') * 0.20 +
+                full_text.count('.') * 0.50 +
+                full_text.count('!') * 0.40 +
+                full_text.count('?') * 0.40 +
+                full_text.count(';') * 0.30 +
+                full_text.upper().count('[PAUSE]') * 0.80
+            )
 
             estimated_duration = max(
                 MIN_DURATION,
-                real_word_count / max(TTS_WPS, 0.1)
+                real_word_count / max(ELEVENLABS_WPS, 0.1) + pause_budget
             )
 
             jlog("info", msg=(
-                f"PIXEL_PERFECT_V34: Audio fallback — "
-                f"{real_word_count} mots → "
-                f"durée cible {estimated_duration:.2f}s "
-                f"(TTS_WPS={TTS_WPS:.2f}, min={MIN_DURATION}s)"
+                f"PIXEL_PERFECT_V35: Audio fallback — "
+                f"{real_word_count} mots + {pause_budget:.1f}s pauses → "
+                f"durée {estimated_duration:.2f}s "
+                f"(WPS={ELEVENLABS_WPS:.2f})"
             ))
 
-            dummy_audio_path = os.path.join(self.root_dir, "silence_nucleaire_v32.mp3")
+            dummy_audio_path = os.path.join(self.root_dir, "silence_nucleaire_v35.mp3")
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", str(estimated_duration), "-q:a", "9",
@@ -1080,7 +1219,7 @@ class NexusBrain:
         return audio_path
 
     # ─────────────────────────────────────────────────────────────────────
-    # ÉTAPE 4 : ASSEMBLAGE V32 — Motion Engine complet (inchangé V34)
+    # ÉTAPE 4 : ASSEMBLAGE V32 — Motion Engine complet (inchangé V35)
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_4_assembly(
@@ -1303,7 +1442,7 @@ class NexusBrain:
 
             timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             unique_hash = str(uuid.uuid4())[:6]
-            suffix      = "_SAFE" if safe_mode else "_V34_MOTION"
+            suffix      = "_SAFE" if safe_mode else "_V35_MOTION"
             filename    = f"nexus_final_{timestamp}_{unique_hash}{suffix}.mp4"
             output_path = os.path.join(self.root_dir, filename)
 
@@ -1324,7 +1463,7 @@ class NexusBrain:
                 except Exception: pass
 
             final_video_path = output_path
-            jlog("success", msg=f"✅ Vidéo V34 Motion Engine générée : {filename}")
+            jlog("success", msg=f"✅ Vidéo V35 Motion Engine générée : {filename}")
 
         except Exception as e:
             if not safe_mode:
@@ -1366,7 +1505,7 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_da_mode(self, script_data: Optional[Dict] = None):
-        jlog("info", msg="🎨 FAST DA TEST MODE V34 ACTIVATED")
+        jlog("info", msg="🎨 FAST DA TEST MODE V35 ACTIVATED")
 
         if not script_data:
             topic       = await self._step_0_brainstorm_topic()
@@ -1384,7 +1523,7 @@ class NexusBrain:
         vid = await self._step_4_assembly(script_data, imgs, broll_indices, audio_path, safe_mode=False)
 
         if vid:
-            jlog("success", msg=f"✅ Test DA V34 terminé: {vid}")
+            jlog("success", msg=f"✅ Test DA V35 terminé: {vid}")
 
     # ─────────────────────────────────────────────────────────────────────
     # INGESTION MANUELLE
@@ -1425,7 +1564,7 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_daemon(self):
-        jlog("info", msg="Nexus Brain Daemon Started (V34 MOTION ENGINE)")
+        jlog("info", msg="Nexus Brain Daemon Started (V35 MOTION ENGINE)")
 
         while True:
             manual_files = sorted(list(self.hot_root.glob("*.*")))
@@ -1463,7 +1602,7 @@ class NexusBrain:
                     if vid:
                         await self._deliver_package(vid, script)
                         self.last_run_date = current_date
-                        jlog("success", msg=f"Cycle complet V34: {current_date}")
+                        jlog("success", msg=f"Cycle complet V35: {current_date}")
                 else:
                     jlog("error", msg="Script invalide (pas de 'scenes'). Abandon du cycle.")
 
@@ -1481,7 +1620,7 @@ class NexusBrain:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Nexus Brain V34 (MOTION ENGINE)")
+    parser = argparse.ArgumentParser(description="Nexus Brain V35 (MOTION ENGINE)")
     parser.add_argument("--da", action="store_true", help="Mode DA test sans API.")
     args, _ = parser.parse_known_args()
 

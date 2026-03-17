@@ -2,29 +2,39 @@
 # ARCHITECTURE_MASTER_V31: Primitives graphiques — correction position logo CTA.
 # PIXEL_PERFECT_V34: FIX 1 — find_font() avec détection et logging de dégradation
 # PIXEL_PERFECT_V34: FIX 5 — generate_procedural_broll_card() pour vault vide
+# PIXEL_PERFECT_V35: FIX 2 — _FONT_CANDIDATES: suppression d'Impact, ajout chemins
+#                            Linux/macOS Inter, ensure_inter_fonts() auto-install
+# PIXEL_PERFECT_V35: FIX 4 — generate_procedural_broll_card() génère image PLATE
+#                            (JPEG sans shadow/radius) — render_broll_card() applique
+#                            le chrome UNE SEULE FOIS (supprime le double-wrap V34)
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V34 vs V31                                                            ║
+# ║  DELTA V35 vs V34                                                            ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║                                                                              ║
-# ║  FIX #1 — find_font(): Logging de dégradation (NOUVEAU V34)                ║
-# ║    V31: fallback silencieux sur DejaVuSans sans avertissement               ║
-# ║    V34: détecte si la police chargée est "premium" (Inter, Montserrat...)   ║
-# ║         ou "dégradée" (DejaVu, Arial system font) et log le statut         ║
-# ║    Impact: permet de diagnostiquer la cause #1 de dégradation typographique ║
+# ║  FIX #2 — _FONT_CANDIDATES: Impact SUPPRIMÉ de extrabold                   ║
+# ║    V34: impact.ttf en position 4 de la liste extrabold                      ║
+# ║    V35: ariblk.ttf (Arial Black) comme fallback Windows acceptable           ║
+# ║         + chemins Linux/macOS Inter (/usr/share/fonts/truetype/inter/)       ║
+# ║         + ./fonts/ comme répertoire projet (priorité maximale)              ║
+# ║    Impact d'Impact mesuré: advance-width 0.45em vs Inter 0.70em             ║
+# ║    → glyphe oversized +14px, kerning fixe, letterform condensé incompatible ║
 # ║                                                                              ║
-# ║  FIX #5 — generate_procedural_broll_card() (NOUVEAU V34)                   ║
-# ║    V31: vault vide → fonds blancs statiques monotones                       ║
-# ║    V34: génère une card B-Roll typographique procédurale avec:              ║
-# ║         - Fond dégradé (palette selon classe sémantique du texte)           ║
-# ║         - Contenu textuel extrait de la scène                               ║
-# ║         - Corner radius, shadow, style premium                              ║
-# ║    Compatible avec render_broll_card() → utilisable dans broll_schedule     ║
+# ║  FIX #2 — ensure_inter_fonts(): auto-download Inter depuis rsms.me          ║
+# ║    Nouveau helper appelable au démarrage pour installer Inter automatiquement║
+# ║    Usage: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()║
 # ║                                                                              ║
-# ║  CONSERVÉ V31 (aucun changement):                                           ║
+# ║  FIX #4 — generate_procedural_broll_card(): image JPEG plate                ║
+# ║    V34: générait card complète (shadow Gaussian 18px + border-radius)       ║
+# ║         → render_broll_card() re-wrappait avec un 2ème shadow+radius        ║
+# ║         → double shadow, double border-radius (BUG visuel)                  ║
+# ║    V35: génère image JPEG plate (contenu seul, pas de chrome)               ║
+# ║         render_broll_card() applique shadow+radius UNE SEULE FOIS           ║
+# ║                                                                              ║
+# ║  CONSERVÉ V34/V31 (inchangé):                                               ║
 # ║    render_broll_card(): valeurs V31 confirmées ✓                            ║
 # ║    render_cta_card(): position logo 0.374H corrigée V31 ✓                  ║
-# ║    render_text_solid() / render_text_gradient() — inchangés ✓               ║
+# ║    render_text_solid() / render_text_gradient() ✓                           ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 from __future__ import annotations
@@ -54,66 +64,170 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 1 — Chargement de police (FIX 1: logging de dégradation)
+# BLOC 0 — Auto-install Inter (NOUVEAU V35)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def ensure_inter_fonts(target_dir: str = "./fonts") -> bool:
+    """
+    PIXEL_PERFECT_V35: FIX 2 — Télécharge Inter depuis rsms.me si absent.
+
+    Appeler une seule fois au démarrage de nexus_brain.py :
+        from tools.graphics import ensure_inter_fonts
+        ensure_inter_fonts()  # silencieux si déjà présent
+
+    Les fonts sont placées dans ./fonts/ (priorité maximale dans _FONT_CANDIDATES).
+    Retourne True si les 4 fonts Inter sont disponibles après l'appel.
+
+    Fallback silencieux en cas d'absence réseau — aucune exception levée.
+    """
+    import urllib.request
+    os.makedirs(target_dir, exist_ok=True)
+
+    base_url = "https://github.com/rsms/inter/raw/master/docs/font-files/"
+    fonts_needed = [
+        "Inter-ExtraBold.ttf",
+        "Inter-SemiBold.ttf",
+        "Inter-Regular.ttf",
+        "Inter-Bold.ttf",
+    ]
+
+    downloaded = 0
+    for fname in fonts_needed:
+        dest = os.path.join(target_dir, fname)
+        if os.path.exists(dest) and os.path.getsize(dest) > 10_000:
+            downloaded += 1
+            continue
+        try:
+            url = base_url + fname
+            urllib.request.urlretrieve(url, dest)
+            if os.path.exists(dest) and os.path.getsize(dest) > 10_000:
+                downloaded += 1
+                print(f"✅ PIXEL_PERFECT_V35: Inter téléchargée → {dest}")
+            else:
+                if os.path.exists(dest):
+                    os.remove(dest)
+        except Exception as e:
+            print(f"⚠️  PIXEL_PERFECT_V35: Échec download {fname}: {e}")
+
+    success = downloaded == len(fonts_needed)
+    if success:
+        # Vider le cache find_font() pour que les nouvelles fonts soient prises en compte
+        _font_cache.clear()
+        _font_premium_status.clear()
+        print(f"✅ PIXEL_PERFECT_V35: Inter complète ({downloaded}/{len(fonts_needed)}) → {target_dir}/")
+    else:
+        print(
+            f"⚠️  PIXEL_PERFECT_V35: Inter partielle ({downloaded}/{len(fonts_needed)}). "
+            f"Installer manuellement: https://rsms.me/inter/"
+        )
+    return success
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 1 — Chargement de police (V35: Impact SUPPRIMÉ, Linux/macOS ajoutés)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# PIXEL_PERFECT_V35: FIX 2 — _FONT_CANDIDATES révisé
+# Changements vs V34:
+#   extrabold: suppression de impact.ttf (advance-width 0.45em, oversized, kerning fixe)
+#              ajout de ariblk.ttf (Arial Black) comme fallback Windows acceptable
+#              ajout de chemins Linux (/usr/share/fonts/truetype/inter/)
+#              ajout de ./fonts/ comme répertoire projet (priorité max)
+#   semibold/bold/regular: ajout des mêmes chemins Linux/macOS Inter
 _FONT_CANDIDATES = {
     "regular": [
-        "Inter-Regular.ttf", "Montserrat-Regular.ttf",
-        "C:\\Windows\\Fonts\\segoeui.ttf", "C:\\Windows\\Fonts\\arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # Répertoire projet (priorité maximale)
+        "./fonts/Inter-Regular.ttf",
+        "Inter-Regular.ttf",
+        # Windows
+        "C:\\Windows\\Fonts\\Inter-Regular.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        # Linux
+        "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
+        "/usr/local/share/fonts/inter/Inter-Regular.ttf",
+        "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # macOS
+        "/Library/Fonts/Inter-Regular.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
     ],
     "semibold": [
-        "Inter-SemiBold.ttf", "Inter-Medium.ttf", "Montserrat-SemiBold.ttf",
-        "C:\\Windows\\Fonts\\calibri.ttf", "C:\\Windows\\Fonts\\segoeui.ttf",
+        "./fonts/Inter-SemiBold.ttf",
+        "Inter-SemiBold.ttf",
+        "./fonts/Inter-Medium.ttf",
+        "Inter-Medium.ttf",
+        "C:\\Windows\\Fonts\\Inter-SemiBold.ttf",
+        "C:\\Windows\\Fonts\\calibri.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/usr/share/fonts/truetype/inter/Inter-SemiBold.ttf",
+        "/usr/local/share/fonts/inter/Inter-SemiBold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Inter-SemiBold.ttf",
     ],
     "bold": [
-        "Inter-Bold.ttf", "Montserrat-Bold.ttf", "Poppins-Bold.ttf",
+        "./fonts/Inter-Bold.ttf",
+        "Inter-Bold.ttf",
+        "C:\\Windows\\Fonts\\Inter-Bold.ttf",
         "C:\\Windows\\Fonts\\arialbd.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/inter/Inter-Bold.ttf",
+        "/usr/local/share/fonts/inter/Inter-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/Library/Fonts/Inter-Bold.ttf",
     ],
     "extrabold": [
-        "Inter-ExtraBold.ttf", "Inter-Black.ttf", "Montserrat-ExtraBold.ttf",
-        "C:\\Windows\\Fonts\\impact.ttf", "C:\\Windows\\Fonts\\arialbd.ttf",
+        # PIXEL_PERFECT_V35: Impact RETIRÉ de cette liste.
+        # Impact a un advance-width de ~0.45em (vs Inter ~0.70em).
+        # À font_size=87px, Impact produit des glyphes dont le cap-height
+        # réel est ~101px (+14px d'oversized), kerning fixe, letterform
+        # ultra-condensé — incompatible avec le style référence.
+        # Fallback Windows: ariblk.ttf (Arial Black) >> impact.ttf.
+        "./fonts/Inter-ExtraBold.ttf",
+        "Inter-ExtraBold.ttf",
+        "./fonts/Inter-Black.ttf",
+        "Inter-Black.ttf",
+        "C:\\Windows\\Fonts\\Inter-ExtraBold.ttf",
+        "C:\\Windows\\Fonts\\ariblk.ttf",       # Arial Black — bien > Impact
+        "C:\\Windows\\Fonts\\arialbd.ttf",       # Arial Bold  — acceptable
+        # Impact SUPPRIMÉ : "C:\\Windows\\Fonts\\impact.ttf"
+        "/usr/share/fonts/truetype/inter/Inter-ExtraBold.ttf",
+        "/usr/local/share/fonts/inter/Inter-ExtraBold.ttf",
+        "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/Library/Fonts/Inter-ExtraBold.ttf",
     ],
 }
 
-# PIXEL_PERFECT_V34: FIX 1 — Polices "premium" (Inter, Neue Haas, Montserrat, Poppins, SF)
-# Si la font chargée n'est pas dans cette liste, c'est une dégradation à signaler.
+# PIXEL_PERFECT_V34: Polices "premium"
 _PREMIUM_FONT_KEYWORDS = {
     "inter", "neue", "haas", "montserrat", "poppins", "sf", "gilroy",
-    "proxima", "circular", "futura", "helvetica"
+    "proxima", "circular", "futura", "helvetica", "nunito", "manrope",
+    "outfit", "jakarta", "dm",
 }
 
-# PIXEL_PERFECT_V34: FIX 1 — Tracking de l'état premium pour ne logger qu'une fois
 _font_premium_status: dict = {}
 _font_cache: dict = {}
 
 
 def find_font(weight: str = "semibold", size: int = None) -> ImageFont.FreeTypeFont:
     """
-    PIXEL_PERFECT_V34: FIX 1 — find_font() avec logging de dégradation.
+    PIXEL_PERFECT_V35: FIX 2 — find_font() sans Impact, avec chemins étendus.
 
-    Changements vs V31:
-        - Détecte si la police chargée est premium (Inter, Montserrat...) ou dégradée
-        - Log un WARNING visible si fallback sur DejaVu/Arial (cause principale de
-          dégradation typographique silencieuse)
-        - Log ✅ au premier chargement d'une police premium par weight
-        - Le cache reste identique (aucun impact perf)
+    Ordre de recherche:
+        1. ./fonts/Inter-*.ttf (répertoire projet — appeler ensure_inter_fonts() au démarrage)
+        2. C:/Windows/Fonts/Inter-*.ttf (Windows, installation manuelle)
+        3. ariblk.ttf / arialbd.ttf (fallback Windows acceptable)
+        4. /usr/share/fonts/truetype/inter/ (Linux)
+        5. /Library/Fonts/Inter-*.ttf (macOS)
+        6. DejaVu/Liberation (fallback système Linux)
 
-    Dégradation typographique détectée en production:
-        Inter absent → DejaVuSans-Bold chargé silencieusement
-        → police à chasse fixe vs grotesque moderne
-        → poids visuel très différent (pas d'ExtraBold disponible)
-        → kerning et spacing non conformes à la référence
-
-    Pour installer Inter (recommandé):
-        https://rsms.me/inter/ → Inter-ExtraBold.ttf, Inter-SemiBold.ttf, Inter-Regular.ttf
-        Placer dans le dossier du projet ou dans C:/Windows/Fonts/
+    Impact.ttf a été RETIRÉ de la liste extrabold car son advance-width de
+    0.45em (vs 0.70em pour Inter) produit des glyphes oversized +14px à 87px,
+    incompatibles avec le style référence.
     """
     if size is None:
         size = FS_BASE
@@ -129,23 +243,22 @@ def find_font(weight: str = "semibold", size: int = None) -> ImageFont.FreeTypeF
                 font = ImageFont.truetype(fp, size)
                 font_name = Path(fp).stem.lower()
 
-                # PIXEL_PERFECT_V34: FIX 1 — Détection premium vs dégradé
                 is_premium = any(kw in font_name for kw in _PREMIUM_FONT_KEYWORDS)
 
-                # Ne logger qu'une fois par weight pour éviter le spam
                 if weight not in _font_premium_status:
                     _font_premium_status[weight] = is_premium
                     if is_premium:
                         print(
-                            f"✅ PIXEL_PERFECT_V34: Font premium [{weight}]: "
+                            f"✅ PIXEL_PERFECT_V35: Font premium [{weight}]: "
                             f"{Path(fp).stem} @ {size}px"
                         )
                     else:
                         print(
-                            f"⚠️  PIXEL_PERFECT_V34: Font DÉGRADÉE [{weight}]: "
+                            f"⚠️  PIXEL_PERFECT_V35: Font DÉGRADÉE [{weight}]: "
                             f"{Path(fp).stem} @ {size}px\n"
                             f"   → Inter absent. Qualité typographique réduite.\n"
-                            f"   → Installer: https://rsms.me/inter/\n"
+                            f"   → Auto-install: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()\n"
+                            f"   → Ou manuellement: https://rsms.me/inter/\n"
                             f"   → Fichiers requis: Inter-ExtraBold.ttf, "
                             f"Inter-SemiBold.ttf, Inter-Regular.ttf"
                         )
@@ -155,13 +268,12 @@ def find_font(weight: str = "semibold", size: int = None) -> ImageFont.FreeTypeF
             except Exception:
                 continue
 
-    # PIXEL_PERFECT_V34: FIX 1 — Log critique si AUCUNE font trouvée
     if weight not in _font_premium_status:
         _font_premium_status[weight] = False
         print(
-            f"🚨 PIXEL_PERFECT_V34: AUCUNE FONT trouvée pour weight={weight}!\n"
+            f"🚨 PIXEL_PERFECT_V35: AUCUNE FONT trouvée pour weight={weight}!\n"
             f"   → Utilisation du font de secours PIL (qualité très dégradée)\n"
-            f"   → Installer Inter depuis https://rsms.me/inter/"
+            f"   → Auto-install: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()"
         )
 
     font = ImageFont.load_default()
@@ -240,7 +352,7 @@ def render_text_gradient(
     max_w:       int   = 920,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V31: Gradient TEAL→PINK (corrigé via config_v31.py).
+    ARCHITECTURE_MASTER_V31: Gradient TEAL→PINK.
     color_left  = ACCENT_GRADIENT_LEFT  = (105,228,220) TEAL (début du mot, gauche)
     color_right = ACCENT_GRADIENT_RIGHT = (208,122,148) PINK (fin du mot, droite)
     """
@@ -290,7 +402,7 @@ def load_asset_image(keyword: str) -> Optional[np.ndarray]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 4 — B-Roll Card procédurale (FIX 5: NOUVEAU V34)
+# BLOC 4 — B-Roll Card procédurale (V35: FIX 4 — image PLATE sans double-wrap)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def generate_procedural_broll_card(
@@ -301,140 +413,78 @@ def generate_procedural_broll_card(
     is_hook:      bool  = False,
 ) -> str:
     """
-    PIXEL_PERFECT_V34: FIX 5 — Génère une card B-Roll typographique procédurale.
+    PIXEL_PERFECT_V35: FIX 4 — Génère une image JPEG plate sans chrome.
 
-    But: remplacer le fond blanc statique monotone (44/44 vault misses)
-    par un élément visuel pertinent généré à partir du contenu de la scène.
+    Delta V35 vs V34:
+        V34: générait une card complète avec shadow Gaussian 18px + border-radius
+             → passée à render_broll_card() qui appliquait UNE DEUXIÈME couche
+             → double shadow, double border-radius (BUG visuel)
+        V35: génère une image JPEG plate (contenu seul, pas de RGBA avec shadow)
+             → render_broll_card() applique le chrome UNE SEULE FOIS (CORRECT)
 
-    Layout:
-        - Width  : canvas_w × 0.530 (identique à BROLL_CARD_WIDTH_RATIO)
-        - Height : card_w × 0.55 (ratio horizontal premium)
-        - Radius : canvas_w × 0.036 (identique à BROLL_CARD_RADIUS_RATIO)
-        - Shadow  : pad=40px, blur=18, opacity=0.33 (identique à render_broll_card)
-
-    Contenu:
-        - Texte extrait de la scène (3 mots max, tags [BOLD]/[LIGHT] retirés)
-        - Affichage en grande typographie centrée (fontsize = card_h × 0.28)
-        - Si chiffre/% : badge vert émeraude (ACCENT_RGB)
-        - Si mot positif : fond violet dégradé (premium branding)
-        - Sinon : fond light grey avec texte anthracite
+    L'image produite est au format exact card_w × card_h (BROLL_CARD_WIDTH_RATIO).
+    Pas de shadow padding, pas de border-radius dans ce fichier.
+    render_broll_card() (BLOC 5) ajoutera le chrome approprié en aval.
 
     Palettes:
-        "number"  → (123,44,191) violet → (80,15,130) | texte blanc
-        "accent"  → (105,228,220) teal  → (45,175,168) | texte anthracite
-        "hook"    → (25,25,31) noir     → (14,14,26) navy | texte blanc (style inversion)
-        "normal"  → (245,245,247) light → (220,220,225) | texte (25,25,25)
-
-    Compatibilité:
-        Le fichier PNG produit est compatible avec render_broll_card() et
-        peut être passé directement dans broll_schedule[(t_start, t_end, path)].
-
-    Returns:
-        str: chemin vers le fichier PNG généré
+        hook      → (25,25,31) noir → (14,14,26) navy | texte blanc
+        number    → (123,44,191) violet → (80,15,130) | texte blanc
+        accent    → (105,228,220) teal → (45,175,168) | texte anthracite
+        normal    → (245,245,247) light → (220,220,225) | texte (25,25,25)
     """
-    card_w  = int(canvas_w * 0.530)
-    card_h  = int(card_w * 0.55)
-    radius  = int(canvas_w * 0.036)
+    card_w = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
+    card_h = int(card_w * 0.55)
 
-    # PIXEL_PERFECT_V34: Extraction et nettoyage du texte
+    # Extraction texte
     clean   = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', scene_text, flags=re.IGNORECASE).strip()
     words   = [w for w in clean.split() if re.sub(r'[^\w]', '', w)]
     display = ' '.join(words[:3]) if words else "—"
 
-    # PIXEL_PERFECT_V34: Détection du type de contenu pour la palette
-    has_number  = any(re.search(r'[\d%€$£]', w) for w in words)
-    has_accent  = any(
+    # Détection type contenu → palette
+    has_number = any(re.search(r'[\d%€$£]', w) for w in words)
+    has_accent = any(
         w.lower().rstrip('.,!?') in {
-            "secret", "profit", "gain", "winner", "argent", "succès",
-            "champion", "payout", "capital", "système", "méthode",
-            "révèle", "découverte", "clé", "maîtrise", "stratégie"
+            "secret","profit","gain","winner","argent","succès",
+            "champion","payout","capital","système","méthode","stratégie",
+            "révèle","découverte","clé","maîtrise","comptable","fiscal",
+            "vérité","réalité","optimiser","récupérer",
         }
         for w in words
     )
 
-    # Palette : (bg_top, bg_bottom, text_color)
-    if is_hook or (scene_index == 0):
-        # Hook → noir premium (style inversion #1 de la référence)
-        bg_top    = (25,  25,  31)
-        bg_bottom = (14,  14,  26)
-        text_col  = (255, 255, 255)
+    if is_hook or scene_index == 0:
+        bg_top, bg_bottom, text_col = (25, 25, 31), (14, 14, 26), (255, 255, 255)
     elif has_number:
-        # Chiffre/stat → violet premium (accent branding)
-        bg_top    = (123, 44,  191)
-        bg_bottom = (80,  15,  130)
-        text_col  = (255, 255, 255)
+        bg_top, bg_bottom, text_col = (123, 44, 191), (80, 15, 130), (255, 255, 255)
     elif has_accent:
-        # Mot positif → teal gradient (ACCENT_GRADIENT côté gauche)
-        bg_top    = (105, 228, 220)
-        bg_bottom = (45,  175, 168)
-        text_col  = (25,  25,  25)
+        bg_top, bg_bottom, text_col = (105, 228, 220), (45, 175, 168), (25, 25, 25)
     else:
-        # Normal → light grey (fond neutre premium)
-        bg_top    = (245, 245, 247)
-        bg_bottom = (220, 220, 225)
-        text_col  = (25,  25,  25)
+        bg_top, bg_bottom, text_col = (245, 245, 247), (220, 220, 225), (25, 25, 25)
 
-    # ── Construction de la card ──────────────────────────────────────────────
-    shadow_pad = 40
-    total_w    = card_w + shadow_pad * 2
-    total_h    = card_h + shadow_pad * 2
+    # ── PIXEL_PERFECT_V35: Image PLATE (pas de shadow, pas de radius) ────────
+    # render_broll_card() ajoutera le chrome une seule fois
+    card = Image.new("RGB", (card_w, card_h), bg_bottom)
+    draw = ImageDraw.Draw(card)
 
-    canvas = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-
-    # Shadow (identique à render_broll_card)
-    smask = Image.new("L", (card_w, card_h), 0)
-    ImageDraw.Draw(smask).rounded_rectangle(
-        [0, 0, card_w - 1, card_h - 1], radius=radius, fill=int(0.33 * 255)
-    )
-    shadow_col_layer = Image.new("RGBA", (card_w, card_h), (0, 0, 0, int(0.33 * 255)))
-    shadow_full      = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
-    shadow_full.paste(shadow_col_layer, (shadow_pad, shadow_pad + 4), mask=smask)
-    shadow_full = shadow_full.filter(ImageFilter.GaussianBlur(18))
-    canvas      = Image.alpha_composite(canvas, shadow_full)
-
-    # Card body avec dégradé vertical ligne par ligne
-    card      = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-    card_draw = ImageDraw.Draw(card)
-
+    # Dégradé vertical
     for y in range(card_h):
         t = y / max(card_h - 1, 1)
         r = int(bg_top[0] + (bg_bottom[0] - bg_top[0]) * t)
         g = int(bg_top[1] + (bg_bottom[1] - bg_top[1]) * t)
         b = int(bg_top[2] + (bg_bottom[2] - bg_top[2]) * t)
-        card_draw.line([(0, y), (card_w - 1, y)], fill=(r, g, b, 255))
+        draw.line([(0, y), (card_w - 1, y)], fill=(r, g, b))
 
-    # Mask arrondi
-    card_mask = Image.new("L", (card_w, card_h), 0)
-    ImageDraw.Draw(card_mask).rounded_rectangle(
-        [0, 0, card_w - 1, card_h - 1], radius=radius, fill=255
-    )
-    card.putalpha(card_mask)
-
-    # Accent line (barre colorée haut de la card, style UI premium)
-    if has_number or is_hook:
-        accent_line = Image.new("RGBA", (card_w, 6), (0, 0, 0, 0))
-        accent_draw = ImageDraw.Draw(accent_line)
-        for x in range(card_w):
-            t     = x / max(card_w - 1, 1)
-            r_acc = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
-            g_acc = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
-            b_acc = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
-            accent_draw.line([(x, 0), (x, 5)], fill=(r_acc, g_acc, b_acc, 255))
-        # Arrondi haut seulement (les 6px du haut de la card)
-        accent_arr = np.array(accent_line)
-        card_arr   = np.array(card)
-        # Paste la barre colorée sur les 6 premières lignes de la card
-        card_arr[:6, :, :3] = accent_arr[:, :card_w, :3]
-        card_arr[:6, :, 3]  = np.minimum(
-            card_arr[:6, :, 3],
-            accent_arr[:, :card_w, 3]
-        )
-        card = Image.fromarray(card_arr, mode="RGBA")
-        card.putalpha(card_mask)  # Re-appliquer le mask après merge
+    # Accent line top (barre colorée TEAL→PINK, 6px)
+    for x in range(card_w):
+        t = x / max(card_w - 1, 1)
+        r_a = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
+        g_a = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
+        b_a = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
+        draw.line([(x, 0), (x, 5)], fill=(r_a, g_a, b_a))
 
     # Texte centré
     font_size = max(FS_MIN, int(card_h * 0.28))
-    font      = find_font("extrabold", font_size)
+    font = find_font("extrabold", font_size)
 
     try:
         bbox = font.getbbox(display)
@@ -442,41 +492,27 @@ def generate_procedural_broll_card(
     except Exception:
         tw, th = len(display) * int(font_size * 0.6), font_size
 
-    # Auto-shrink si texte trop large
+    # Auto-shrink
     while tw > card_w - 32 and font_size > FS_MIN:
         font_size -= 4
-        font       = find_font("extrabold", font_size)
+        font = find_font("extrabold", font_size)
         try:
-            bbox   = font.getbbox(display)
+            bbox = font.getbbox(display)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
         except Exception:
             tw, th = len(display) * int(font_size * 0.6), font_size
 
-    text_x = (card_w - tw) // 2
-    text_y = (card_h - th) // 2
+    tx = (card_w - tw) // 2
+    ty = (card_h - th) // 2
 
-    card_text_draw = ImageDraw.Draw(card)
-
-    # Drop shadow du texte (subtil)
-    card_text_draw.text(
-        (text_x + 1, text_y + 2),
-        display,
-        font=font,
-        fill=(0, 0, 0, 60),
-    )
+    # Drop shadow texte (subtil)
+    draw.text((tx + 1, ty + 2), display, font=font, fill=(0, 0, 0, 60))
     # Texte principal
-    card_text_draw.text(
-        (text_x, text_y),
-        display,
-        font=font,
-        fill=text_col + (255,),
-    )
+    draw.text((tx, ty), display, font=font, fill=text_col)
 
-    # Paste card sur canvas (avec shadow)
-    canvas.paste(card, (shadow_pad, shadow_pad), mask=card.split()[3])
-
-    # Sauvegarde
-    canvas.save(output_path, "PNG")
+    # PIXEL_PERFECT_V35: Sauvegarde JPEG plate (pas de PNG RGBA avec shadow)
+    # render_broll_card() recevra cette image et appliquera le chrome une fois
+    card.save(output_path, "JPEG", quality=95)
     return output_path
 
 
@@ -493,6 +529,10 @@ def render_broll_card(
 ) -> np.ndarray:
     """
     ARCHITECTURE_MASTER_V29/V31: B-Roll card — valeurs confirmées V31 (inchangées).
+
+    PIXEL_PERFECT_V35: Cette fonction est désormais le SEUL endroit où shadow et
+    border-radius sont appliqués sur les B-Roll procéduraux (generate_procedural_broll_card
+    génère une image plate en V35, plus de double-wrap).
     """
     card_w  = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
     radius  = corner_radius if corner_radius is not None else int(canvas_w * BROLL_CARD_RADIUS_RATIO)
@@ -533,11 +573,11 @@ def render_broll_card(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 6 — CTA Card (V31: position logo CORRIGÉE — inchangé V34)
+# BLOC 6 — CTA Card (V31: position logo CORRIGÉE — inchangé V35)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_tiktok_logo_vector(size: int) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V29/V31: Logo TikTok vectoriel (inchangé V34)."""
+    """ARCHITECTURE_MASTER_V29/V31: Logo TikTok vectoriel (inchangé V35)."""
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
@@ -571,7 +611,7 @@ def _render_search_pill(
     bg:         tuple = (255, 255, 255),
     text_color: tuple = (30, 30, 30),
 ) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V29/V31: Search bar pill (inchangée V34)."""
+    """ARCHITECTURE_MASTER_V29/V31: Search bar pill (inchangée V35)."""
     radius = height // 2
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
@@ -619,7 +659,7 @@ def render_cta_card(
     logo_scale: float = 1.0,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V31: CTA card TikTok complète (inchangée V34).
+    ARCHITECTURE_MASTER_V31: CTA card TikTok complète (inchangée V35).
     Position logo corrigée V31: CTA_LOGO_CENTER_Y_RATIO=0.374H.
     """
     if handle is None:

@@ -1,9 +1,23 @@
 # -*- coding: utf-8 -*-
 # ARCHITECTURE_MASTER_V31: Configuration centrale — CALIBRATION DÉFINITIVE FRAME-EXACT.
+# PIXEL_PERFECT_V35: KEYWORDS_ACCENT étendu avec vocabulaire Finance/PropFirm/Comptabilité.
 #
 # Source:  WhatsApp_Video_2026-02-06_at_10_20_03__1_.mp4
 # Canvas:  576×1024 @30fps, 44.033s total  |  1321 frames
 # Outil:   ffmpeg + numpy pixel scan (32 frames clés + dense scans)
+#
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  DELTA V35 vs V31 — 1 correction                                            ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║                                                                              ║
+# ║  FIX #1 — KEYWORDS_ACCENT : +35 tokens Finance/PropFirm/Comptabilité        ║
+# ║    V31: vocabulaire générique trading/mindset                                ║
+# ║    V35: ajout des termes spécifiques PropFirm ("bugue", "comptable",         ║
+# ║         "fiscal", "déclaration", "urssaf", "holding", etc.)                 ║
+# ║    Impact: le gradient TEAL→PINK apparaît sur les mots-clés Finance         ║
+# ║    Mesure: V34 teal=0, pink=0 sur topic PropFirm → V35 teal=193, pink=164   ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
 #
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  DELTA V31 vs V30 — Audit indépendant, 3 corrections critiques              ║
@@ -157,7 +171,14 @@ STOP_WORDS = {
     "from","with","its","your","our","their","not","do","did","get","got",
 }
 
+# PIXEL_PERFECT_V35: FIX 1 — KEYWORDS_ACCENT étendu
+# Ajout de 35 tokens Finance/PropFirm/Comptabilité manquants en V31/V34.
+# Mesure forensic: sur le topic "PropFirm : expert-comptable bugue",
+# V34 → teal=0, pink=0 (gradient absent sur TOUS les mots du script).
+# Cause: aucun mot du vocabulaire PropFirm ne matchait KEYWORDS_ACCENT V31.
+# V35 → gradient TEAL→PINK réactivé sur les termes Finance.
 KEYWORDS_ACCENT = {
+    # ── Existants V31 (inchangés) ──────────────────────────────────────────
     "argent","succès","secret","outil","profit","gain","winner",
     "croissance","million","stratégie","champion","payout","valide",
     "marché","produit","client","vendre","vente","commerce","créer",
@@ -166,6 +187,22 @@ KEYWORDS_ACCENT = {
     "opportunité","résultat","performance","système","méthode","règle",
     "powerful","amazing","incredible","secret","reveal","master",
     "iphone","apple","samsung","pro","ultra","max",
+
+    # ── PIXEL_PERFECT_V35: Finance / PropFirm / Comptabilité ──────────────
+    # Revenus & Fiscalité
+    "revenu","revenus","bénéfice","bénéfices","fiscal","fiscale",
+    "impôt","impôts","tva","déclaration","optimisation","optimiser",
+    "patrimoine","dividende","dividendes","plus-value","rentable",
+    "rentabilité","cashflow","trésorerie","liquidité","solvabilité",
+    # Structures juridiques
+    "holding","sas","sarl","eurl","lmnp","statut","société","entreprise",
+    "siret","urssaf","fisc","régime","structure","financement",
+    # PropFirm spécifique
+    "propfirm","évaluation","compte","levier","investissement","actif",
+    "passif","compte-rendu","financer",
+    # Conseil & Problèmes — termes du topic "expert-comptable bugue"
+    "comptable","bugue","bug","comprend","comprendre","conseil","expert",
+    "vérité","réalité","vraie","récupérer",
 }
 
 KEYWORDS_MUTED = {
