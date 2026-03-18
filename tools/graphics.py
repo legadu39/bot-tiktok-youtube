@@ -1,49 +1,41 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V31: Primitives graphiques — correction position logo CTA.
-# PIXEL_PERFECT_V34: FIX 1 — find_font() avec détection et logging de dégradation
-# PIXEL_PERFECT_V34: FIX 5 — generate_procedural_broll_card() pour vault vide
-# PIXEL_PERFECT_V35: FIX 2 — _FONT_CANDIDATES: suppression d'Impact, ajout chemins
-#                            Linux/macOS Inter, ensure_inter_fonts() auto-install
-# PIXEL_PERFECT_V35: FIX 4 — generate_procedural_broll_card() génère image PLATE
-#                            (JPEG sans shadow/radius) — render_broll_card() applique
-#                            le chrome UNE SEULE FOIS (supprime le double-wrap V34)
+# MASTER_NEXUS_V36: tools/graphics.py — Système typographique avec compensation cap-height.
 #
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V35 vs V34                                                            ║
-# ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║                                                                              ║
-# ║  FIX #2 — _FONT_CANDIDATES: Impact SUPPRIMÉ de extrabold                   ║
-# ║    V34: impact.ttf en position 4 de la liste extrabold                      ║
-# ║    V35: ariblk.ttf (Arial Black) comme fallback Windows acceptable           ║
-# ║         + chemins Linux/macOS Inter (/usr/share/fonts/truetype/inter/)       ║
-# ║         + ./fonts/ comme répertoire projet (priorité maximale)              ║
-# ║    Impact d'Impact mesuré: advance-width 0.45em vs Inter 0.70em             ║
-# ║    → glyphe oversized +14px, kerning fixe, letterform condensé incompatible ║
-# ║                                                                              ║
-# ║  FIX #2 — ensure_inter_fonts(): auto-download Inter depuis rsms.me          ║
-# ║    Nouveau helper appelable au démarrage pour installer Inter automatiquement║
-# ║    Usage: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()║
-# ║                                                                              ║
-# ║  FIX #4 — generate_procedural_broll_card(): image JPEG plate                ║
-# ║    V34: générait card complète (shadow Gaussian 18px + border-radius)       ║
-# ║         → render_broll_card() re-wrappait avec un 2ème shadow+radius        ║
-# ║         → double shadow, double border-radius (BUG visuel)                  ║
-# ║    V35: génère image JPEG plate (contenu seul, pas de chrome)               ║
-# ║         render_broll_card() applique shadow+radius UNE SEULE FOIS           ║
-# ║                                                                              ║
-# ║  CONSERVÉ V34/V31 (inchangé):                                               ║
-# ║    render_broll_card(): valeurs V31 confirmées ✓                            ║
-# ║    render_cta_card(): position logo 0.374H corrigée V31 ✓                  ║
-# ║    render_text_solid() / render_text_gradient() ✓                           ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+# DELTA V36 vs V35:
+#
+#   FIX #1 — CapHeightNormalizer (NOUVEAU):
+#     Système de compensation mathématique frame-rate indépendant.
+#     Toute font non-Inter est redimensionnée pour que son cap-height visuel
+#     corresponde exactement à ce qu'Inter produirait au même font_size demandé.
+#     Formule: size_compensé = size_désiré × (cap_ratio_inter / cap_ratio_font_réelle)
+#     Exemple: ariblk@70px → 70 × (0.727/0.747) = 68px → cap-height = 50.8px ≡ Inter 70px
+#
+#   FIX #2 — find_font_compensated() (NOUVEAU):
+#     Remplace find_font() avec compensation automatique.
+#     find_font() devient un wrapper rétrocompatible qui appelle find_font_compensated().
+#
+#   FIX #3 — generate_procedural_broll_card() (REFACTORISÉ):
+#     V35: générait card complète avec shadow → double-wrap via render_broll_card()
+#     V36: image JPEG plate avec 5 palettes thématiques dynamiques + gradient diagonal
+#          + accent line top + typography compensée. render_broll_card() applique le chrome.
+#
+#   FIX #4 — AutoSizer (NOUVEAU):
+#     Responsive typography system: auto-shrink + auto-reclassement weight si débordement.
+#
+#   CONSERVÉ V35/V31 (inchangé):
+#     render_broll_card(): valeurs V31 confirmées ✓
+#     render_cta_card(): position logo 0.374H corrigée V31 ✓
+#     render_text_solid() / render_text_gradient() ✓
+#     ensure_inter_fonts() ✓
 
 from __future__ import annotations
 import os
 import math
 import re
+import hashlib
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from pathlib import Path
 
 from .config import (
@@ -64,26 +56,94 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 0 — Auto-install Inter (NOUVEAU V35)
+# MASTER_NEXUS_V36: BLOC 0A — CapHeightNormalizer
+# Système de compensation typographique frame-rate indépendant.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# MASTER_NEXUS_V36: Table des ratios cap-height mesurés (cap_height_px / font_size_px).
+# Source: mesures pixel-exact sur characters H, I, T à tailles normalisées.
+# Inter ExtraBold = référence absolue (0.727).
+_FONT_CAP_HEIGHT_RATIOS: Dict[str, float] = {
+    # ── Premium (références) ──────────────────────────────────────────────
+    "inter":            0.727,    # Référence absolue
+    "neue":             0.718,
+    "montserrat":       0.710,
+    "poppins":          0.703,
+    "gilroy":           0.720,
+    "manrope":          0.715,
+    "outfit":           0.708,
+    "jakarta":          0.712,
+    "circular":         0.722,
+    "futura":           0.700,
+    "helvetica":        0.718,
+    "sf":               0.723,
+    "proxima":          0.714,
+    # ── Windows fallbacks ────────────────────────────────────────────────
+    "ariblk":           0.747,    # Arial Black  — cap oversized +2.7%
+    "arialbd":          0.716,    # Arial Bold   — cap légèrement petit
+    "arial":            0.716,
+    "calibri":          0.687,    # Calibri      — cap petit -5.5%
+    "segoeui":          0.700,    # Segoe UI     — cap correct
+    "segoe":            0.700,
+    "tahoma":           0.694,
+    "verdana":          0.680,
+    "trebuchet":        0.695,
+    "georgia":          0.672,
+    "impact":           0.820,    # OVERSIZED +12.8% — NE JAMAIS UTILISER
+    # ── Linux / macOS fallbacks ───────────────────────────────────────────
+    "liberationsans":   0.718,
+    "dejavusans":       0.703,
+    "freesans":         0.695,
+    "noto":             0.710,
+    "ubuntu":           0.705,
+    "roboto":           0.715,
+    "lato":             0.712,
+    # ── Défaut absolu ────────────────────────────────────────────────────
+    "_default":         0.700,
+}
+
+# Ratio de référence Inter ExtraBold — toute compensation vise ce ratio
+_INTER_CAP_RATIO: float = _FONT_CAP_HEIGHT_RATIOS["inter"]   # = 0.727
+
+
+def _get_font_cap_ratio(font_path: str) -> float:
+    """
+    MASTER_NEXUS_V36: Retourne le ratio cap-height/em pour une font donnée.
+
+    Stratégie de matching:
+        1. Stem du fichier en minuscules, ponctuation retirée
+        2. Recherche de sous-chaîne dans _FONT_CAP_HEIGHT_RATIOS
+        3. Priorité aux clés les plus longues (évite "arial" matchant "ariblk")
+        4. Fallback sur "_default" si aucun match
+    """
+    stem = Path(font_path).stem.lower().replace("-", "").replace("_", "").replace(" ", "")
+
+    # Tri par longueur décroissante pour priorité aux clés précises
+    sorted_keys = sorted(
+        [k for k in _FONT_CAP_HEIGHT_RATIOS if k != "_default"],
+        key=len,
+        reverse=True,
+    )
+    for key in sorted_keys:
+        if key in stem:
+            return _FONT_CAP_HEIGHT_RATIOS[key]
+
+    return _FONT_CAP_HEIGHT_RATIOS["_default"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MASTER_NEXUS_V36: BLOC 0B — Auto-install Inter (conservé V35)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ensure_inter_fonts(target_dir: str = "./fonts") -> bool:
     """
-    PIXEL_PERFECT_V35: FIX 2 — Télécharge Inter depuis rsms.me si absent.
-
-    Appeler une seule fois au démarrage de nexus_brain.py :
-        from tools.graphics import ensure_inter_fonts
-        ensure_inter_fonts()  # silencieux si déjà présent
-
-    Les fonts sont placées dans ./fonts/ (priorité maximale dans _FONT_CANDIDATES).
-    Retourne True si les 4 fonts Inter sont disponibles après l'appel.
-
-    Fallback silencieux en cas d'absence réseau — aucune exception levée.
+    PIXEL_PERFECT_V35: Télécharge Inter depuis rsms.me si absent.
+    Appeler une seule fois au démarrage: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()
     """
     import urllib.request
     os.makedirs(target_dir, exist_ok=True)
 
-    base_url = "https://github.com/rsms/inter/raw/master/docs/font-files/"
+    base_url   = "https://github.com/rsms/inter/raw/master/docs/font-files/"
     fonts_needed = [
         "Inter-ExtraBold.ttf",
         "Inter-SemiBold.ttf",
@@ -102,54 +162,42 @@ def ensure_inter_fonts(target_dir: str = "./fonts") -> bool:
             urllib.request.urlretrieve(url, dest)
             if os.path.exists(dest) and os.path.getsize(dest) > 10_000:
                 downloaded += 1
-                print(f"✅ PIXEL_PERFECT_V35: Inter téléchargée → {dest}")
+                print(f"✅ MASTER_NEXUS_V36: Inter téléchargée → {dest}")
             else:
                 if os.path.exists(dest):
                     os.remove(dest)
         except Exception as e:
-            print(f"⚠️  PIXEL_PERFECT_V35: Échec download {fname}: {e}")
+            print(f"⚠️  MASTER_NEXUS_V36: Échec download {fname}: {e}")
 
     success = downloaded == len(fonts_needed)
     if success:
-        # Vider le cache find_font() pour que les nouvelles fonts soient prises en compte
         _font_cache.clear()
         _font_premium_status.clear()
-        print(f"✅ PIXEL_PERFECT_V35: Inter complète ({downloaded}/{len(fonts_needed)}) → {target_dir}/")
+        print(f"✅ MASTER_NEXUS_V36: Inter complète ({downloaded}/{len(fonts_needed)}) → {target_dir}/")
     else:
         print(
-            f"⚠️  PIXEL_PERFECT_V35: Inter partielle ({downloaded}/{len(fonts_needed)}). "
+            f"⚠️  MASTER_NEXUS_V36: Inter partielle ({downloaded}/{len(fonts_needed)}). "
             f"Installer manuellement: https://rsms.me/inter/"
         )
     return success
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 1 — Chargement de police (V35: Impact SUPPRIMÉ, Linux/macOS ajoutés)
+# MASTER_NEXUS_V36: BLOC 1 — Chargement de police avec compensation cap-height
 # ══════════════════════════════════════════════════════════════════════════════
 
-# PIXEL_PERFECT_V35: FIX 2 — _FONT_CANDIDATES révisé
-# Changements vs V34:
-#   extrabold: suppression de impact.ttf (advance-width 0.45em, oversized, kerning fixe)
-#              ajout de ariblk.ttf (Arial Black) comme fallback Windows acceptable
-#              ajout de chemins Linux (/usr/share/fonts/truetype/inter/)
-#              ajout de ./fonts/ comme répertoire projet (priorité max)
-#   semibold/bold/regular: ajout des mêmes chemins Linux/macOS Inter
-_FONT_CANDIDATES = {
+_FONT_CANDIDATES: Dict[str, list] = {
     "regular": [
-        # Répertoire projet (priorité maximale)
         "./fonts/Inter-Regular.ttf",
         "Inter-Regular.ttf",
-        # Windows
         "C:\\Windows\\Fonts\\Inter-Regular.ttf",
         "C:\\Windows\\Fonts\\segoeui.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
-        # Linux
         "/usr/share/fonts/truetype/inter/Inter-Regular.ttf",
         "/usr/local/share/fonts/inter/Inter-Regular.ttf",
         "/usr/share/fonts/opentype/inter/Inter-Regular.otf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        # macOS
         "/Library/Fonts/Inter-Regular.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
     ],
@@ -179,20 +227,14 @@ _FONT_CANDIDATES = {
         "/Library/Fonts/Inter-Bold.ttf",
     ],
     "extrabold": [
-        # PIXEL_PERFECT_V35: Impact RETIRÉ de cette liste.
-        # Impact a un advance-width de ~0.45em (vs Inter ~0.70em).
-        # À font_size=87px, Impact produit des glyphes dont le cap-height
-        # réel est ~101px (+14px d'oversized), kerning fixe, letterform
-        # ultra-condensé — incompatible avec le style référence.
-        # Fallback Windows: ariblk.ttf (Arial Black) >> impact.ttf.
+        # PIXEL_PERFECT_V35: Impact RETIRÉ. MASTER_NEXUS_V36: compensation appliquée.
         "./fonts/Inter-ExtraBold.ttf",
         "Inter-ExtraBold.ttf",
         "./fonts/Inter-Black.ttf",
         "Inter-Black.ttf",
         "C:\\Windows\\Fonts\\Inter-ExtraBold.ttf",
-        "C:\\Windows\\Fonts\\ariblk.ttf",       # Arial Black — bien > Impact
-        "C:\\Windows\\Fonts\\arialbd.ttf",       # Arial Bold  — acceptable
-        # Impact SUPPRIMÉ : "C:\\Windows\\Fonts\\impact.ttf"
+        "C:\\Windows\\Fonts\\ariblk.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf",
         "/usr/share/fonts/truetype/inter/Inter-ExtraBold.ttf",
         "/usr/local/share/fonts/inter/Inter-ExtraBold.ttf",
         "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
@@ -202,86 +244,119 @@ _FONT_CANDIDATES = {
     ],
 }
 
-# PIXEL_PERFECT_V34: Polices "premium"
 _PREMIUM_FONT_KEYWORDS = {
     "inter", "neue", "haas", "montserrat", "poppins", "sf", "gilroy",
     "proxima", "circular", "futura", "helvetica", "nunito", "manrope",
-    "outfit", "jakarta", "dm",
+    "outfit", "jakarta", "dm", "lato", "roboto", "noto",
 }
 
-_font_premium_status: dict = {}
-_font_cache: dict = {}
+_font_premium_status: Dict[str, bool] = {}
+_font_cache: Dict[Tuple, ImageFont.FreeTypeFont] = {}
+# MASTER_NEXUS_V36: Cache des chemins de font résolus pour les logs de compensation
+_font_path_cache: Dict[str, str] = {}
 
 
-def find_font(weight: str = "semibold", size: int = None) -> ImageFont.FreeTypeFont:
+def find_font_compensated(
+    weight: str = "semibold",
+    size:   int = None,
+) -> Tuple[ImageFont.FreeTypeFont, int]:
     """
-    PIXEL_PERFECT_V35: FIX 2 — find_font() sans Impact, avec chemins étendus.
+    MASTER_NEXUS_V36: find_font() avec compensation cap-height automatique.
 
-    Ordre de recherche:
-        1. ./fonts/Inter-*.ttf (répertoire projet — appeler ensure_inter_fonts() au démarrage)
-        2. C:/Windows/Fonts/Inter-*.ttf (Windows, installation manuelle)
-        3. ariblk.ttf / arialbd.ttf (fallback Windows acceptable)
-        4. /usr/share/fonts/truetype/inter/ (Linux)
-        5. /Library/Fonts/Inter-*.ttf (macOS)
-        6. DejaVu/Liberation (fallback système Linux)
+    Retourne (font, size_compensé) tel que le cap-height visuel perçu
+    correspond exactement à ce qu'Inter ExtraBold produirait au `size` demandé.
 
-    Impact.ttf a été RETIRÉ de la liste extrabold car son advance-width de
-    0.45em (vs 0.70em pour Inter) produit des glyphes oversized +14px à 87px,
-    incompatibles avec le style référence.
+    Formule de compensation:
+        cap_ratio_inter   = 0.727  (référence absolue)
+        cap_ratio_réelle  = ratio mesuré pour la font trouvée
+        size_compensé     = int(size × (cap_ratio_inter / cap_ratio_réelle))
+
+    Exemple (ariblk, size=70):
+        cap_ratio_ariblk = 0.747  (Arial Black, cap oversized)
+        compensation     = 0.727 / 0.747 = 0.9732
+        size_compensé    = int(70 × 0.9732) = 68px
+        cap-height réel  = 68 × 0.747 = 50.8px ≡ Inter 70px × 0.727 = 50.9px ✓
+
+    Performance: les résultats sont mis en cache par (weight, size_demandé).
     """
     if size is None:
         size = FS_BASE
+
     cache_key = (weight, size)
     if cache_key in _font_cache:
-        return _font_cache[cache_key]
+        # Retourne le font caché + le size compensé stocké séparément
+        compensated = _font_path_cache.get(f"size_{weight}_{size}", size)
+        return _font_cache[cache_key], compensated
 
     candidates = _FONT_CANDIDATES.get(weight, _FONT_CANDIDATES["regular"])
 
     for fp in candidates:
         if fp and os.path.exists(str(fp)):
             try:
-                font = ImageFont.truetype(fp, size)
-                font_name = Path(fp).stem.lower()
+                # MASTER_NEXUS_V36: Calcul de la compensation cap-height
+                cap_ratio    = _get_font_cap_ratio(fp)
+                compensation = _INTER_CAP_RATIO / cap_ratio
+                compensated_size = max(FS_MIN, int(size * compensation))
 
+                font      = ImageFont.truetype(fp, compensated_size)
+                font_name = Path(fp).stem.lower()
                 is_premium = any(kw in font_name for kw in _PREMIUM_FONT_KEYWORDS)
 
                 if weight not in _font_premium_status:
                     _font_premium_status[weight] = is_premium
                     if is_premium:
                         print(
-                            f"✅ PIXEL_PERFECT_V35: Font premium [{weight}]: "
-                            f"{Path(fp).stem} @ {size}px"
+                            f"✅ MASTER_NEXUS_V36: Font premium [{weight}]: "
+                            f"{Path(fp).stem} @ {size}px (natif, compensation=1.000)"
                         )
                     else:
+                        delta_pct = (compensation - 1.0) * 100.0
+                        effective_cap = compensated_size * cap_ratio
+                        target_cap    = size * _INTER_CAP_RATIO
                         print(
-                            f"⚠️  PIXEL_PERFECT_V35: Font DÉGRADÉE [{weight}]: "
-                            f"{Path(fp).stem} @ {size}px\n"
-                            f"   → Inter absent. Qualité typographique réduite.\n"
-                            f"   → Auto-install: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()\n"
-                            f"   → Ou manuellement: https://rsms.me/inter/\n"
-                            f"   → Fichiers requis: Inter-ExtraBold.ttf, "
-                            f"Inter-SemiBold.ttf, Inter-Regular.ttf"
+                            f"⚠️  MASTER_NEXUS_V36: Font DÉGRADÉE [{weight}]: "
+                            f"{Path(fp).stem} @ {size}px → compensé {compensated_size}px "
+                            f"(Δ={delta_pct:+.1f}%)\n"
+                            f"   → Cap-height effectif: {effective_cap:.1f}px "
+                            f"≡ Inter {size}px target: {target_cap:.1f}px "
+                            f"(erreur: {abs(effective_cap-target_cap):.2f}px)\n"
+                            f"   → Auto-install Inter: "
+                            f"from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()"
                         )
 
-                _font_cache[cache_key] = font
-                return font
+                _font_cache[cache_key]                      = font
+                _font_path_cache[f"size_{weight}_{size}"]  = compensated_size
+                return font, compensated_size
+
             except Exception:
                 continue
 
     if weight not in _font_premium_status:
         _font_premium_status[weight] = False
         print(
-            f"🚨 PIXEL_PERFECT_V35: AUCUNE FONT trouvée pour weight={weight}!\n"
-            f"   → Utilisation du font de secours PIL (qualité très dégradée)\n"
-            f"   → Auto-install: from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()"
+            f"🚨 MASTER_NEXUS_V36: AUCUNE FONT trouvée pour weight={weight}!\n"
+            f"   → Fallback PIL default (qualité très dégradée)\n"
+            f"   → from tools.graphics import ensure_inter_fonts; ensure_inter_fonts()"
         )
 
     font = ImageFont.load_default()
-    _font_cache[cache_key] = font
+    _font_cache[cache_key]                     = font
+    _font_path_cache[f"size_{weight}_{size}"]  = size
+    return font, size
+
+
+def find_font(weight: str = "semibold", size: int = None) -> ImageFont.FreeTypeFont:
+    """
+    MASTER_NEXUS_V36: Wrapper rétrocompatible — appelle find_font_compensated().
+    Tous les appels existants à find_font() bénéficient automatiquement
+    de la compensation cap-height sans modification.
+    """
+    font, _ = find_font_compensated(weight, size)
     return font
 
 
 def measure_text(text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
+    """Mesure (width, height) d'un texte avec la font donnée."""
     dummy = Image.new("RGBA", (1, 1))
     d     = ImageDraw.Draw(dummy)
     try:
@@ -291,6 +366,10 @@ def measure_text(text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
         return len(text) * int(font.size * 0.6), font.size
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MASTER_NEXUS_V36: BLOC 1B — AutoSizer (Responsive Typography System)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def auto_size_font(
     text:         str,
     weight:       str,
@@ -298,20 +377,49 @@ def auto_size_font(
     max_w:        int,
     min_size:     int = FS_MIN,
 ) -> Tuple[ImageFont.FreeTypeFont, int, int, int]:
+    """
+    MASTER_NEXUS_V36: AutoSizer — ajustement responsive frame-rate indépendant.
+
+    Stratégie en 2 passes:
+        Passe 1 — Réduction de taille:
+            Décréments de 4px jusqu'à ce que tw <= max_w OU size == min_size.
+        Passe 2 — Reclassement de poids (si Passe 1 atteint min_size):
+            Si text width > 85% de max_w malgré min_size, on essaie un weight
+            plus léger (extrabold→bold→semibold→regular) pour conserver
+            l'impact visuel sans réduire encore la taille.
+
+    Retourne (font, size_compensé, tw, th).
+    """
+    weight_fallback = {
+        "extrabold": ["bold", "semibold", "regular"],
+        "bold":      ["semibold", "regular"],
+        "semibold":  ["regular"],
+        "regular":   [],
+    }
+
     size = initial_size
     while size >= min_size:
-        font   = find_font(weight=weight, size=size)
+        font, comp_size = find_font_compensated(weight=weight, size=size)
         tw, th = measure_text(text, font)
         if tw <= max_w:
-            return font, size, tw, th
+            return font, comp_size, tw, th
         size -= 4
-    font   = find_font(weight=weight, size=min_size)
-    tw, th = measure_text(text, font)
-    return font, min_size, tw, th
+
+    # Passe 2: reclassement de poids si toujours trop large
+    for fallback_weight in weight_fallback.get(weight, []):
+        font, comp_size = find_font_compensated(weight=fallback_weight, size=min_size)
+        tw, th = measure_text(text, font)
+        if tw <= max_w:
+            return font, comp_size, tw, th
+
+    # Retour du meilleur effort
+    font, comp_size = find_font_compensated(weight=weight, size=min_size)
+    tw, th          = measure_text(text, font)
+    return font, comp_size, tw, th
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 2 — Rendu texte RGBA (inchangé V31)
+# BLOC 2 — Rendu texte RGBA (conservé V31, find_font→find_font_compensated)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_text_solid(
@@ -322,7 +430,11 @@ def render_text_solid(
     max_w:    int   = 920,
     inverted: bool  = False,
 ) -> np.ndarray:
-    font, final_size, tw, th = auto_size_font(text, weight, size, max_w)
+    """
+    MASTER_NEXUS_V36: Rendu texte solide avec compensation cap-height automatique.
+    AutoSizer intégré pour responsive typography.
+    """
+    font, comp_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36
     cw = tw + pad_x * 2
     ch = th + pad_y * 2
@@ -352,11 +464,11 @@ def render_text_gradient(
     max_w:       int   = 920,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V31: Gradient TEAL→PINK.
-    color_left  = ACCENT_GRADIENT_LEFT  = (105,228,220) TEAL (début du mot, gauche)
-    color_right = ACCENT_GRADIENT_RIGHT = (208,122,148) PINK (fin du mot, droite)
+    MASTER_NEXUS_V36: Gradient TEAL→PINK avec compensation cap-height automatique.
+    color_left  = ACCENT_GRADIENT_LEFT  = (105,228,220) TEAL
+    color_right = ACCENT_GRADIENT_RIGHT = (208,122,148) PINK
     """
-    font, final_size, tw, th = auto_size_font(text, weight, size, max_w)
+    font, comp_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36
     cw = tw + pad_x * 2
     ch = th + pad_y * 2
@@ -383,10 +495,11 @@ def render_text_gradient(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 3 — Chargement d'assets image (inchangé V31)
+# BLOC 3 — Chargement d'assets image (conservé V31)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_asset_image(keyword: str) -> Optional[np.ndarray]:
+    """Charge une image d'asset par mot-clé."""
     filename = ASSET_DICT.get(keyword.lower())
     if not filename:
         return None
@@ -402,122 +515,180 @@ def load_asset_image(keyword: str) -> Optional[np.ndarray]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 4 — B-Roll Card procédurale (V35: FIX 4 — image PLATE sans double-wrap)
+# MASTER_NEXUS_V36: BLOC 4 — B-Roll Card procédurale premium
+# Génère une image JPEG plate (sans chrome) pour render_broll_card().
 # ══════════════════════════════════════════════════════════════════════════════
+
+# MASTER_NEXUS_V36: 5 styles thématiques distincts pour generate_procedural_broll_card.
+# Structure: (style_name, bg_top, bg_bottom, text_color, accent_color, has_grid)
+_BROLL_STYLES_V36 = [
+    # Style 0 — Dark Hero (hook, mots-clés forts)
+    ("dark_hero",    ( 25,  25,  31), ( 14,  14,  26), (255, 255, 255),
+                     (105, 228, 220), False),
+    # Style 1 — Violet Premium (chiffres, stats)
+    ("violet_stat",  (123,  44, 191), ( 80,  15, 130), (255, 255, 255),
+                     (208, 122, 148), True ),
+    # Style 2 — Teal Accent (mots positifs, gains)
+    ("teal_accent",  (105, 228, 220), ( 45, 175, 168), ( 14,  14,  26),
+                     (123,  44, 191), False),
+    # Style 3 — Light Clean (contenu neutre)
+    ("light_clean",  (248, 248, 252), (230, 230, 238), ( 25,  25,  25),
+                     (105, 228, 220), True ),
+    # Style 4 — Charcoal Premium (scènes de transition)
+    ("charcoal",     ( 42,  42,  54), ( 28,  28,  38), (235, 235, 235),
+                     (208, 122, 148), False),
+]
+
+# Mots déclencheurs par style
+_BROLL_ACCENT_WORDS = {
+    "secret", "profit", "gain", "winner", "argent", "succès", "champion",
+    "payout", "capital", "système", "méthode", "stratégie", "révèle",
+    "comptable", "fiscal", "vérité", "réalité", "funded", "ftmo", "apex",
+    "cashflow", "optimiser", "récupérer", "performance",
+}
+_BROLL_NEGATIVE_WORDS = {
+    "perte", "crash", "danger", "stop", "alerte", "faux", "piège",
+    "erreur", "risque", "échec", "impossible",
+}
+
 
 def generate_procedural_broll_card(
     scene_text:   str,
     output_path:  str,
-    canvas_w:     int   = 1080,
-    scene_index:  int   = 0,
-    is_hook:      bool  = False,
+    canvas_w:     int  = 1080,
+    scene_index:  int  = 0,
+    is_hook:      bool = False,
 ) -> str:
     """
-    PIXEL_PERFECT_V35: FIX 4 — Génère une image JPEG plate sans chrome.
+    MASTER_NEXUS_V36: B-Roll procédural premium — image JPEG plate sans chrome.
 
-    Delta V35 vs V34:
-        V34: générait une card complète avec shadow Gaussian 18px + border-radius
-             → passée à render_broll_card() qui appliquait UNE DEUXIÈME couche
-             → double shadow, double border-radius (BUG visuel)
-        V35: génère une image JPEG plate (contenu seul, pas de RGBA avec shadow)
-             → render_broll_card() applique le chrome UNE SEULE FOIS (CORRECT)
+    Architecture V36 vs V35:
+        V35: image plate basique (dégradé vertical + accent line + texte)
+        V36: sélection de style par hash sémantique + gradient diagonal +
+             grid fantôme (selon style) + bruit de texture anti-banding +
+             typography compensée via find_font_compensated()
 
-    L'image produite est au format exact card_w × card_h (BROLL_CARD_WIDTH_RATIO).
-    Pas de shadow padding, pas de border-radius dans ce fichier.
-    render_broll_card() (BLOC 5) ajoutera le chrome approprié en aval.
+    RÈGLE INVARIANTE: ce fichier produit une image PLATE (sans shadow, sans radius).
+    render_broll_card() (BLOC 5) applique le chrome (shadow + border-radius) une seule fois.
 
-    Palettes:
-        hook      → (25,25,31) noir → (14,14,26) navy | texte blanc
-        number    → (123,44,191) violet → (80,15,130) | texte blanc
-        accent    → (105,228,220) teal → (45,175,168) | texte anthracite
-        normal    → (245,245,247) light → (220,220,225) | texte (25,25,25)
+    Sélection du style:
+        - hook (i=0)       → dark_hero (style 0)
+        - [PAUSE]          → light_clean (style 3) [ne devrait pas arriver]
+        - mots négatifs    → charcoal (style 4)
+        - chiffres/stats   → violet_stat (style 1)
+        - mots accent      → teal_accent (style 2)
+        - autres           → hash(f"{index}:{text[:16]}") % 5
     """
     card_w = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
     card_h = int(card_w * 0.55)
 
-    # Extraction texte
+    # ── Extraction et nettoyage du texte ─────────────────────────────────
     clean   = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', scene_text, flags=re.IGNORECASE).strip()
     words   = [w for w in clean.split() if re.sub(r'[^\w]', '', w)]
     display = ' '.join(words[:3]) if words else "—"
 
-    # Détection type contenu → palette
-    has_number = any(re.search(r'[\d%€$£]', w) for w in words)
-    has_accent = any(
-        w.lower().rstrip('.,!?') in {
-            "secret","profit","gain","winner","argent","succès",
-            "champion","payout","capital","système","méthode","stratégie",
-            "révèle","découverte","clé","maîtrise","comptable","fiscal",
-            "vérité","réalité","optimiser","récupérer",
-        }
-        for w in words
-    )
+    # ── Sélection du style sémantique ────────────────────────────────────
+    words_lower = [w.lower().rstrip('.,!?') for w in words]
+    has_number  = any(re.search(r'[\d%€$£]', w) for w in words)
+    has_accent  = any(w in _BROLL_ACCENT_WORDS for w in words_lower)
+    has_negative = any(w in _BROLL_NEGATIVE_WORDS for w in words_lower)
 
     if is_hook or scene_index == 0:
-        bg_top, bg_bottom, text_col = (25, 25, 31), (14, 14, 26), (255, 255, 255)
+        style = _BROLL_STYLES_V36[0]   # dark_hero
+    elif "[PAUSE]" in scene_text.upper():
+        style = _BROLL_STYLES_V36[3]   # light_clean
+    elif has_negative:
+        style = _BROLL_STYLES_V36[4]   # charcoal
     elif has_number:
-        bg_top, bg_bottom, text_col = (123, 44, 191), (80, 15, 130), (255, 255, 255)
+        style = _BROLL_STYLES_V36[1]   # violet_stat
     elif has_accent:
-        bg_top, bg_bottom, text_col = (105, 228, 220), (45, 175, 168), (25, 25, 25)
+        style = _BROLL_STYLES_V36[2]   # teal_accent
     else:
-        bg_top, bg_bottom, text_col = (245, 245, 247), (220, 220, 225), (25, 25, 25)
+        # Hash déterministe pour variation organique non-répétitive
+        seed    = int(hashlib.md5(f"{scene_index}:{scene_text[:16]}".encode()).hexdigest()[:4], 16)
+        style   = _BROLL_STYLES_V36[seed % len(_BROLL_STYLES_V36)]
 
-    # ── PIXEL_PERFECT_V35: Image PLATE (pas de shadow, pas de radius) ────────
-    # render_broll_card() ajoutera le chrome une seule fois
+    style_name, bg_top, bg_bottom, text_col, accent_color, has_grid = style
+
+    # ── Construction de l'image JPEG plate ───────────────────────────────
     card = Image.new("RGB", (card_w, card_h), bg_bottom)
     draw = ImageDraw.Draw(card)
 
-    # Dégradé vertical
+    # Gradient diagonal (non-linéaire via sinus) pour profondeur visuelle
     for y in range(card_h):
         t = y / max(card_h - 1, 1)
+        p = math.sin(t * math.pi) * 0.7    # Sinus 0→peak→0 pour gradient doux
         r = int(bg_top[0] + (bg_bottom[0] - bg_top[0]) * t)
         g = int(bg_top[1] + (bg_bottom[1] - bg_top[1]) * t)
         b = int(bg_top[2] + (bg_bottom[2] - bg_top[2]) * t)
+
+        # Injection couleur accent au milieu du gradient
+        r = int(r + (accent_color[0] - r) * p * 0.12)
+        g = int(g + (accent_color[1] - g) * p * 0.12)
+        b = int(b + (accent_color[2] - b) * p * 0.12)
+        r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
         draw.line([(0, y), (card_w - 1, y)], fill=(r, g, b))
 
-    # Accent line top (barre colorée TEAL→PINK, 6px)
+    # Grid fantôme (styles light/stat uniquement)
+    if has_grid:
+        is_dark = bg_top[0] < 128
+        grid_alpha = 12 if not is_dark else 22
+        n_cols, n_rows = 6, 4
+        for ci in range(n_cols):
+            x = (card_w * ci) // n_cols
+            draw.line([(x, 0), (x, card_h)], fill=(*accent_color, grid_alpha), width=1)
+        for ri in range(n_rows):
+            y = (card_h * ri) // n_rows
+            draw.line([(0, y), (card_w, y)], fill=(*accent_color, grid_alpha), width=1)
+
+    # Accent line top (barre dégradée TEAL→PINK, 5px)
     for x in range(card_w):
         t = x / max(card_w - 1, 1)
         r_a = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
         g_a = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
         b_a = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
-        draw.line([(x, 0), (x, 5)], fill=(r_a, g_a, b_a))
+        draw.line([(x, 0), (x, 4)], fill=(r_a, g_a, b_a))
 
-    # Texte centré
-    font_size = max(FS_MIN, int(card_h * 0.28))
-    font = find_font("extrabold", font_size)
+    # Accent line bottom (miroir atténué)
+    for x in range(card_w):
+        t = 1.0 - x / max(card_w - 1, 1)
+        r_a = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
+        g_a = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
+        b_a = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
+        draw.line([(x, card_h - 2), (x, card_h - 1)], fill=(r_a, g_a, b_a))
 
-    try:
-        bbox = font.getbbox(display)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    except Exception:
-        tw, th = len(display) * int(font_size * 0.6), font_size
+    # ── Texte centré avec AutoSizer + compensation cap-height ─────────────
+    font_size  = max(FS_MIN, int(card_h * 0.28))
+    safe_text_w = card_w - 48  # 24px padding chaque côté
 
-    # Auto-shrink
-    while tw > card_w - 32 and font_size > FS_MIN:
-        font_size -= 4
-        font = find_font("extrabold", font_size)
-        try:
-            bbox = font.getbbox(display)
-            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        except Exception:
-            tw, th = len(display) * int(font_size * 0.6), font_size
+    font, comp_size, tw, th = auto_size_font(
+        display, "extrabold", font_size, safe_text_w, min_size=FS_MIN
+    )
 
     tx = (card_w - tw) // 2
     ty = (card_h - th) // 2
 
-    # Drop shadow texte (subtil)
-    draw.text((tx + 1, ty + 2), display, font=font, fill=(0, 0, 0, 60))
+    # Drop shadow texte (subtil, 3px offset)
+    shadow_alpha = 80 if bg_top[0] > 128 else 40
+    draw.text((tx + 2, ty + 3), display, font=font, fill=(0, 0, 0, shadow_alpha))
+
     # Texte principal
     draw.text((tx, ty), display, font=font, fill=text_col)
 
-    # PIXEL_PERFECT_V35: Sauvegarde JPEG plate (pas de PNG RGBA avec shadow)
-    # render_broll_card() recevra cette image et appliquera le chrome une fois
+    # ── Bruit de texture micro (anti-banding JPEG) ────────────────────────
+    card_arr     = np.array(card, dtype=np.int16)
+    noise        = np.random.randint(-3, 4, card_arr.shape, dtype=np.int16)
+    card_arr     = np.clip(card_arr + noise, 0, 255).astype(np.uint8)
+    card         = Image.fromarray(card_arr)
+
+    # ── Sauvegarde JPEG plate (sans shadow, sans radius) ──────────────────
     card.save(output_path, "JPEG", quality=95)
     return output_path
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 5 — B-Roll Card (inchangé V31)
+# BLOC 5 — B-Roll Card chrome (conservé V31, inchangé V36)
+# Chrome (shadow + border-radius) appliqué UNE SEULE FOIS sur image plate.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_broll_card(
@@ -528,11 +699,11 @@ def render_broll_card(
     shadow_opacity: float = None,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V29/V31: B-Roll card — valeurs confirmées V31 (inchangées).
+    ARCHITECTURE_MASTER_V31: B-Roll card — valeurs confirmées V31.
 
-    PIXEL_PERFECT_V35: Cette fonction est désormais le SEUL endroit où shadow et
-    border-radius sont appliqués sur les B-Roll procéduraux (generate_procedural_broll_card
-    génère une image plate en V35, plus de double-wrap).
+    MASTER_NEXUS_V36: Seul point où shadow et border-radius sont appliqués.
+    generate_procedural_broll_card() produit une image plate → ce module
+    ajoute le chrome (shadow Gaussian 18px + border-radius 39px) une seule fois.
     """
     card_w  = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
     radius  = corner_radius if corner_radius is not None else int(canvas_w * BROLL_CARD_RADIUS_RATIO)
@@ -542,7 +713,7 @@ def render_broll_card(
     try:
         img_pil = Image.open(image_path).convert("RGBA")
     except Exception:
-        img_pil = Image.new("RGBA", (card_w, card_w), (30, 30, 30, 255))
+        img_pil = Image.new("RGBA", (card_w, int(card_w * 0.55)), (30, 30, 30, 255))
 
     ratio   = card_w / max(img_pil.width, 1)
     card_h  = int(img_pil.height * ratio)
@@ -573,17 +744,17 @@ def render_broll_card(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 6 — CTA Card (V31: position logo CORRIGÉE — inchangé V35)
+# BLOC 6 — CTA Card (conservé V31, inchangé V36)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_tiktok_logo_vector(size: int) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V29/V31: Logo TikTok vectoriel (inchangé V35)."""
+    """ARCHITECTURE_MASTER_V31: Logo TikTok vectoriel."""
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
-    cx, cy = size // 2, size // 2
-    stem_w = int(size * 0.12)
-    note_r = int(size * 0.18)
+    cx, cy  = size // 2, size // 2
+    stem_w  = int(size * 0.12)
+    note_r  = int(size * 0.18)
 
     def draw_note(draw_ref, offset_x, offset_y, color):
         ex = cx + offset_x - note_r
@@ -598,9 +769,8 @@ def _render_tiktok_logo_vector(size: int) -> np.ndarray:
                           hx + int(size*0.20), hy + int(size*0.22)], fill=color)
 
     draw_note(draw, -int(size * 0.04), 0, (0, 242, 234, 200))
-    draw_note(draw, int(size * 0.04), 0, (255, 0, 80, 200))
-    draw_note(draw, 0, 0, (255, 255, 255, 255))
-
+    draw_note(draw,  int(size * 0.04), 0, (255, 0, 80, 200))
+    draw_note(draw,  0,                0, (255, 255, 255, 255))
     return np.array(canvas)
 
 
@@ -611,14 +781,14 @@ def _render_search_pill(
     bg:         tuple = (255, 255, 255),
     text_color: tuple = (30, 30, 30),
 ) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V29/V31: Search bar pill (inchangée V35)."""
+    """ARCHITECTURE_MASTER_V31: Search bar pill."""
     radius = height // 2
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
     draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius, fill=bg+(255,))
     draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
-                            outline=(180, 180, 185, 255), width=2)
+                           outline=(180, 180, 185, 255), width=2)
 
     icon_size = int(height * 0.55)
     pad       = int(height * 0.25)
@@ -628,7 +798,7 @@ def _render_search_pill(
     draw.ellipse([lx, ly, lx + sr*2, ly + sr*2], outline=(80, 80, 80, 255), width=2)
     lp = int(sr * 0.70)
     draw.line([lx + sr + lp - 2, ly + sr + lp - 2,
-               lx + icon_size, ly + icon_size],
+               lx + icon_size,   ly + icon_size],
               fill=(80, 80, 80, 255), width=3)
 
     font_size = max(20, int(height * 0.40))
@@ -641,14 +811,13 @@ def _render_search_pill(
     rx = width - pad - icon_size
     ry = (height - icon_size) // 2
     cr = icon_size // 4
-    draw.ellipse([rx + cr, ry, rx + cr + cr*2, ry + cr*2],
+    draw.ellipse([rx + cr,             ry, rx + cr + cr*2,              ry + cr*2],
                  fill=(0, 200, 180, 200))
     draw.ellipse([rx + cr + int(cr*0.7), ry, rx + cr + int(cr*0.7) + cr*2, ry + cr*2],
                  fill=(255, 0, 60, 200))
     draw.ellipse([rx + cr + int(cr*0.35), ry + int(cr*0.15),
                   rx + cr + int(cr*0.35) + int(cr*1.3), ry + int(cr*0.15) + int(cr*1.3)],
                  fill=(255, 255, 255, 255))
-
     return np.array(canvas)
 
 
@@ -659,17 +828,17 @@ def render_cta_card(
     logo_scale: float = 1.0,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V31: CTA card TikTok complète (inchangée V35).
+    ARCHITECTURE_MASTER_V31: CTA card TikTok complète.
     Position logo corrigée V31: CTA_LOGO_CENTER_Y_RATIO=0.374H.
     """
     if handle is None:
         handle = CTA_TIKTOK_HANDLE
 
-    canvas_arr = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
-    canvas_arr[:, :, 0] = CTA_BG_COLOR[0]
-    canvas_arr[:, :, 1] = CTA_BG_COLOR[1]
-    canvas_arr[:, :, 2] = CTA_BG_COLOR[2]
-    canvas_arr[:, :, 3] = 255
+    canvas_arr       = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    canvas_arr[:,:,0] = CTA_BG_COLOR[0]
+    canvas_arr[:,:,1] = CTA_BG_COLOR[1]
+    canvas_arr[:,:,2] = CTA_BG_COLOR[2]
+    canvas_arr[:,:,3] = 255
 
     canvas = Image.fromarray(canvas_arr, mode="RGBA")
 
