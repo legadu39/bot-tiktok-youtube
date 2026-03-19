@@ -1,31 +1,25 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V31: SubtitleBurner — Spring sémantique par classe de mot.
-# PIXEL_PERFECT_V34: FIX 2 — apply_continuous_zoom() remplacé par version numpy+cv2
-#                             dans make_frame() pour éliminer le goulot PIL.BICUBIC
+# NEXUS_MASTER_V38: SubtitleBurner — Proportional timestamps + stop word grouping.
 #
-# DELTA V34 vs V31:
-#   FIX 2 — make_frame(): zoom numpy+cv2 au lieu de apply_continuous_zoom PIL.BICUBIC
-#     V31 : apply_continuous_zoom(frame, zoom_scale) → PIL.BICUBIC sur 1920×1080×3
-#            = ~120ms/frame × 1157 frames = 138.8s cumulés (22% du temps Assembly)
-#     V34 : _zoom_frame_fast(frame, zoom_scale) → cv2.INTER_LINEAR ou PIL.BILINEAR
-#            = ~8ms/frame (cv2) ou ~35ms (PIL fallback)
-#            Gain: -93% (cv2) ou -71% (PIL fallback) sur le temps de zoom
-#   FIX 4 — compose_frame() déjà mis à jour dans compositor.py (LUT 60fps + slide V34)
-#   FIX 3 — compose_frame() batch déjà mis à jour dans compositor.py
+# DELTA V38 vs V34:
 #
-# ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║  DELTA V31 vs V30 (conservé, non modifié en V34)                            ║
-# ╠══════════════════════════════════════════════════════════════════════════════╣
-# ║  UPGRADE #1 — SPRING SÉMANTIQUE (MotionProfiler) — conservé V34            ║
-# ║  CONSERVÉ V30 (aucun changement en V34):                                    ║
-# ║    TEXT_ANCHOR_Y_RATIO = 0.4990H FIXE ✓                                    ║
-# ║    Hard cut exit ✓                                                           ║
-# ║    INVERSION_TIMESTAMPS [(12.000,12.733),(40.033,44.033)] ✓                 ║
-# ║    B-Roll center_y = 0.474H ✓                                               ║
-# ║    CTA card logo à 0.374H ✓                                                 ║
-# ║    Sparkles violets rgb(39,0,67) sur inversion #1 ✓                         ║
-# ║    Global zoom 1.00→1.03 ease_in_out_sine — REMPLACÉ par _zoom_frame_fast  ║
-# ╚══════════════════════════════════════════════════════════════════════════════╝
+#   FIX #1 — PROPORTIONAL INVERSION TIMESTAMPS:
+#     V34: burn_subtitles() utilisait INVERSION_TIMESTAMPS hardcodés (12s, 40s).
+#     V38: burn_subtitles() appelle compute_dynamic_inversion_timestamps(duration)
+#          pour des timestamps proportionnels à la durée effective.
+#          → Sur une vidéo de 32s, l'inversion #2 commence à ~29s (au lieu de 40s).
+#
+#   FIX #2 — STOP WORD REGROUPING INTÉGRÉ:
+#     V34: split_to_single_words() → chaque mot isolé.
+#     V38: split_to_single_words() → regroup_stop_with_next() → groupes naturels.
+#          "le meilleur" affiché comme un seul écran au lieu de deux.
+#
+#   FIX #3 — FONTSIZE ADAPTATIF (get_effective_fs_base):
+#     V34: self.fontsize = FS_BASE (toujours 70, même sans Inter).
+#     V38: self.fontsize = get_effective_fs_base() → 50 si fallback, 70 si Inter.
+#
+#   CONSERVÉ V34 (inchangé):
+#     _zoom_frame_fast(), SparkleEngine, B-Roll/CTA pipeline, Whisper, SFX.
 
 from __future__ import annotations
 
@@ -57,12 +51,14 @@ from .config import (
     SPARKLE_ALPHA, SPARKLE_ACTIVE_INVERSION,
     SPARKLE_COLOR_PRIMARY, SPARKLE_COLOR_SECONDARY, SPARKLE_COLOR_ACCENT,
     CTA_TIKTOK_HANDLE,
+    compute_dynamic_inversion_timestamps,
+    get_effective_fs_base,
 )
 from .physics    import SpringPhysics, SpringLUT, wiggle_offset
 from .easing     import EasingLibrary
 from .compositor import WordClip, compose_frame, apply_continuous_zoom
 from .text_engine import (
-    split_to_single_words, classify_word,
+    split_to_single_words, regroup_stop_with_next, classify_word,
     get_word_style, WordClass,
 )
 from .graphics import (
@@ -97,27 +93,12 @@ except ImportError:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PIXEL_PERFECT_V34: FIX 2 — _zoom_frame_fast()
-# Remplace apply_continuous_zoom() PIL.BICUBIC dans make_frame()
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _zoom_frame_fast(frame: np.ndarray, zoom_scale: float) -> np.ndarray:
     """
-    PIXEL_PERFECT_V34: FIX 2 — Zoom ultra-rapide numpy+cv2.
-
-    Remplace PIL.BICUBIC (120ms/frame) par cv2.INTER_LINEAR (~8ms) ou
-    PIL.BILINEAR (~35ms) pour le zoom global continu 1.00→1.03.
-
-    Algorithme identique à apply_continuous_zoom() V34 dans compositor.py:
-        1. Crop centré (H/zoom × W/zoom)
-        2. Resize vers (H×W) avec interpolation optimisée
-
-    Pour delta ∈ [0%, 3%] (zoom référence):
-        Erreur BILINEAR vs BICUBIC: < 0.5 niveau sur 255 → sub-JPEG, imperceptible.
-
-    Impact sur le timing Assembly:
-        V31 (PIL.BICUBIC) : 1157 frames × 120ms = 138.8s
-        V34 (cv2)         : 1157 frames ×   8ms =   9.3s  → gain 129s
-        V34 (PIL fallback): 1157 frames ×  35ms =  40.5s  → gain  98s
+    Zoom ultra-rapide numpy+cv2.
+    Remplace PIL.BICUBIC (~120ms/frame) par cv2.INTER_LINEAR (~8ms).
     """
     if abs(zoom_scale - 1.0) < 0.001:
         return frame
@@ -143,14 +124,11 @@ def _zoom_frame_fast(frame: np.ndarray, zoom_scale: float) -> np.ndarray:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE_MASTER_V29/V31: SparkleEngine (inchangé V34)
+# SparkleEngine (inchangé V34)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SparkleEngine:
-    """
-    ARCHITECTURE_MASTER_V29/V31: Moteur de particules (inversion #1 uniquement).
-    Couleurs mesurées: rgb(39,0,67) violet profond (inchangé V34).
-    """
+    """Moteur de particules violettes (inversion #1 uniquement)."""
 
     PALETTE = [
         SPARKLE_COLOR_PRIMARY,
@@ -208,28 +186,17 @@ class SparkleEngine:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ARCHITECTURE_MASTER_V31: SubtitleBurner Principal
-# PIXEL_PERFECT_V34: FIX 2 — make_frame() utilise _zoom_frame_fast()
+# NEXUS_MASTER_V38: SubtitleBurner Principal
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SubtitleBurner:
     """
-    ARCHITECTURE_MASTER_V31: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
-    PIXEL_PERFECT_V34: FIX 2 — zoom PIL.BICUBIC remplacé par _zoom_frame_fast()
+    NEXUS_MASTER_V38: Moteur unifié sous-titres + B-Roll + Sparkles + CTA.
 
-    Pipeline frame (V34):
-        1. split_to_single_words → 1 mot / entrée
-        2. _build_word_clip  → spring calibré par wclass (V31)
-        3. _build_broll_timelineobject → card à 0.474H
-        4. _build_cta_timelineobject  → CTA navy fenêtre inv#2
-        5. make_frame(t):
-           a. Base frame
-           b. Inversion BG (noir inv#1 / navy inv#2)
-           c. B-Roll cards via TimelineEngine (z=5)
-           d. CTA card via TimelineEngine (z=15)
-           e. Texte via compose_frame (z=10, masqué pendant CTA) [FIX 3+4 V34]
-           f. Sparkles (inversion #1 seulement)
-           g. Zoom global → _zoom_frame_fast() [FIX 2 V34] au lieu de PIL.BICUBIC
+    V38 changes:
+        - burn_subtitles() uses compute_dynamic_inversion_timestamps()
+        - split_to_single_words() → regroup_stop_with_next()
+        - fontsize uses get_effective_fs_base()
     """
 
     VID_W  = 1080
@@ -249,7 +216,8 @@ class SubtitleBurner:
         self.model         = None
         self.model_size    = model_size
         self.platform      = platform
-        self.fontsize      = fontsize if fontsize is not None else FS_BASE
+        # NEXUS_MASTER_V38: FIX #3 — fontsize adaptatif
+        self.fontsize      = fontsize if fontsize is not None else get_effective_fs_base()
         self.tiktok_handle = tiktok_handle or CTA_TIKTOK_HANDLE
 
         self._spring_factory = lambda: SpringPhysics(
@@ -261,7 +229,7 @@ class SubtitleBurner:
         self._sparkle_engine: Optional[SparkleEngine] = None
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 1 — Helpers texte (inchangé V34)
+    # SECTION 1 — Helpers texte
     # ══════════════════════════════════════════════════════════════════════
 
     @staticmethod
@@ -281,7 +249,7 @@ class SubtitleBurner:
         return mapping.get(color, TEXT_RGB_INV)
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 2 — WordClip (V31: spring sémantique — inchangé V34)
+    # SECTION 2 — WordClip (V31: spring sémantique)
     # ══════════════════════════════════════════════════════════════════════
 
     def _get_spring_for_class(self, wclass: str) -> Tuple[SpringPhysics, int]:
@@ -341,7 +309,8 @@ class SubtitleBurner:
         )
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 3 — Inversion timestamps (inchangé V34)
+    # SECTION 3 — Inversion timestamps
+    # NEXUS_MASTER_V38: Supports BOTH hardcoded and proportional modes
     # ══════════════════════════════════════════════════════════════════════
 
     def _compute_inversion_intervals(
@@ -349,6 +318,22 @@ class SubtitleBurner:
         clips:    List[WordClip],
         duration: float,
     ) -> List[Tuple[float, float]]:
+        """
+        NEXUS_MASTER_V38: Calcule les inversions avec timestamps proportionnels.
+
+        Priorité:
+            1. compute_dynamic_inversion_timestamps(duration) → proportionnel
+            2. Fallback sur INVERSION_TIMESTAMPS hardcodés si duration == ~44s
+            3. Fallback sur heuristique par comptage de mots si aucun ne marche
+        """
+        # NEXUS_MASTER_V38: Utiliser les timestamps proportionnels
+        dynamic = compute_dynamic_inversion_timestamps(duration)
+        if dynamic:
+            print(f"🎨 V38: {len(dynamic)} inversion(s) dynamiques: "
+                  f"{[(f'{t0:.3f}s', f'{t1:.3f}s') for t0, t1 in dynamic]}")
+            return dynamic
+
+        # Fallback: timestamps hardcodés si la durée est proche de la référence
         intervals = [
             (t0, min(t1, duration))
             for t0, t1 in INVERSION_TIMESTAMPS
@@ -357,6 +342,7 @@ class SubtitleBurner:
         if intervals:
             return intervals
 
+        # Fallback ultime: heuristique par comptage de mots
         intervals    = []
         sorted_clips = sorted(clips, key=lambda c: c.t_start)
         inv_active   = False
@@ -382,15 +368,38 @@ class SubtitleBurner:
         return intervals
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 4 — Couleur BG inversion (inchangé V34)
+    # SECTION 4 — Couleur BG inversion
+    # NEXUS_MASTER_V38: Utilise les inversions dynamiques
     # ══════════════════════════════════════════════════════════════════════
 
-    def _get_inversion_bg_color(self, t: float) -> Tuple[int, int, int]:
-        if t >= INVERSION_TIMESTAMPS[1][0]:
-            return INVERSION_BG_COLOR_2
+    def _get_inversion_bg_color(
+        self,
+        t: float,
+        inv_intervals: List[Tuple[float, float]],
+    ) -> Tuple[int, int, int]:
+        """
+        NEXUS_MASTER_V38: Détermine la couleur BG par index d'inversion.
+        Inversion #0 (première) → noir pur.
+        Inversion #1+ (dernière) → navy (CTA).
+        """
+        if len(inv_intervals) < 2:
+            return INVERSION_BG_COLOR_1
+
+        # Trouver dans quel intervalle on est
+        for i, (t0, t1) in enumerate(inv_intervals):
+            if t0 <= t < t1:
+                if i == 0:
+                    return INVERSION_BG_COLOR_1
+                else:
+                    return INVERSION_BG_COLOR_2
+
         return INVERSION_BG_COLOR_1
 
-    def _is_sparkle_inversion(self, t: float, inv_intervals: List[Tuple[float, float]]) -> bool:
+    def _is_sparkle_inversion(
+        self,
+        t: float,
+        inv_intervals: List[Tuple[float, float]],
+    ) -> bool:
         if not SPARKLE_ENABLED:
             return False
         active_idx = SPARKLE_ACTIVE_INVERSION
@@ -399,14 +408,21 @@ class SubtitleBurner:
             return t0 <= t < t1
         return False
 
-    def _is_cta_window(self, t: float) -> bool:
-        if len(INVERSION_TIMESTAMPS) < 2:
+    def _is_cta_window(
+        self,
+        t: float,
+        inv_intervals: List[Tuple[float, float]],
+    ) -> bool:
+        """
+        NEXUS_MASTER_V38: CTA window = dernière inversion (navy).
+        """
+        if len(inv_intervals) < 2:
             return False
-        t0, t1 = INVERSION_TIMESTAMPS[1]
+        t0, t1 = inv_intervals[-1]
         return t0 <= t < t1
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 5 — B-Roll TimelineObject (inchangé V34)
+    # SECTION 5 — B-Roll TimelineObject
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_broll_timelineobject(
@@ -449,7 +465,7 @@ class SubtitleBurner:
         ))
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 6 — CTA Card TimelineObject (inchangé V34)
+    # SECTION 6 — CTA Card TimelineObject
     # ══════════════════════════════════════════════════════════════════════
 
     def _build_cta_timelineobject(
@@ -498,7 +514,7 @@ class SubtitleBurner:
         ))
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 7 — Burn principal (V34: FIX 2 dans make_frame)
+    # SECTION 7 — Burn principal (NEXUS_MASTER_V38)
     # ══════════════════════════════════════════════════════════════════════
 
     def burn_subtitles(
@@ -509,41 +525,38 @@ class SubtitleBurner:
         cta_start:      float = None,
     ):
         """
-        PIXEL_PERFECT_V34: FIX 2 — make_frame() utilise _zoom_frame_fast()
-        au lieu de apply_continuous_zoom() PIL.BICUBIC.
-
-        Toutes les autres étapes du pipeline sont identiques à V31.
-        Le gain de performance est concentré sur l'ÉTAPE D (zoom global):
-            V31: PIL.BICUBIC @1920×1080 = ~120ms/frame
-            V34: cv2.INTER_LINEAR       = ~8ms/frame  (×15 speedup)
-                 PIL.BILINEAR (fallback) = ~35ms/frame (×3.4 speedup)
-
-        Sur 1157 frames (38.55s @ 30fps):
-            V31: 138.8s pour le seul zoom global
-            V34: 9.3s (cv2) ou 40.5s (PIL fallback)
-            Gain net sur Assembly: ~90-130s selon disponibilité cv2
+        NEXUS_MASTER_V38: Pipeline burn avec:
+            - Proportional inversion timestamps
+            - Stop word regrouping
+            - Adaptive fontsize
         """
         if not MOVIEPY_AVAILABLE:
             print("⚠️  moviepy indisponible")
             return video_clip
         if not timeline:
-            print("⚠️  [V34] Timeline vide")
+            print("⚠️  [V38] Timeline vide")
             return video_clip
 
         broll_schedule = broll_schedule or []
 
-        # ── Étape 1: 1 mot par entrée ─────────────────────────────────────
+        # ── Étape 1: 1 mot par entrée + regroupement stop words ────────
         words = split_to_single_words(timeline)
-        spring_mode = "sémantique (V31)" if _USE_SEMANTIC_SPRING else "fixe k=900 (fallback V30)"
-        print(f"🎬 V34 Pipeline: {len(timeline)} entrées → {len(words)} mots | spring: {spring_mode}")
+        # NEXUS_MASTER_V38: FIX #2 — Regroupement article/préposition + mot suivant
+        words_before = len(words)
+        words = regroup_stop_with_next(words)
+        words_after = len(words)
 
-        # PIXEL_PERFECT_V34: FIX 2 — détection cv2 pour logging
+        spring_mode = "sémantique (V31)" if _USE_SEMANTIC_SPRING else "fixe k=900 (fallback V30)"
+        print(f"🎬 V38 Pipeline: {len(timeline)} entrées → {words_before} mots → "
+              f"{words_after} groupes (Δ={words_before - words_after} fusions) | "
+              f"spring: {spring_mode} | fontsize: {self.fontsize}px")
+
         try:
             import cv2 as _cv2_check
             _zoom_backend = "cv2.INTER_LINEAR (~8ms/frame)"
         except ImportError:
-            _zoom_backend = "PIL.BILINEAR (~35ms/frame, installer opencv-python pour ×15 speedup)"
-        print(f"🔍 V34 Zoom backend: {_zoom_backend}")
+            _zoom_backend = "PIL.BILINEAR (~35ms/frame)"
+        print(f"🔍 V38 Zoom backend: {_zoom_backend}")
 
         vid_w    = video_clip.w
         vid_h    = video_clip.h
@@ -574,7 +587,7 @@ class SubtitleBurner:
             print("⚠️  Aucun WordClip valide")
             return video_clip
 
-        print(f"✅ V34: {len(all_word_clips)} WordClips @ Y={actual_text_cy}px ({TEXT_ANCHOR_Y_RATIO}H)")
+        print(f"✅ V38: {len(all_word_clips)} WordClips @ Y={actual_text_cy}px ({TEXT_ANCHOR_Y_RATIO}H)")
 
         # ── Étape 4: B-Roll dans TimelineEngine (z=5) ────────────────────
         for t_bs, t_be, img_path in broll_schedule:
@@ -582,9 +595,14 @@ class SubtitleBurner:
             card_cy = int(vid_h * BROLL_CARD_CENTER_Y_RATIO)
             print(f"  📸 Card [{t_bs:.2f},{t_be:.2f}s] → content_center_y={card_cy}px ({BROLL_CARD_CENTER_Y_RATIO}H)")
 
+        # ── NEXUS_MASTER_V38: FIX #1 — Inversions proportionnelles ───────
+        inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
+
         # ── Étape 5: CTA Card dans TimelineEngine (z=15) ─────────────────
-        if len(INVERSION_TIMESTAMPS) >= 2:
-            cta_t0, cta_t1 = INVERSION_TIMESTAMPS[1]
+        # NEXUS_MASTER_V38: Utilise la dernière inversion dynamique au lieu
+        # de INVERSION_TIMESTAMPS hardcodé
+        if len(inv_intervals) >= 2:
+            cta_t0, cta_t1 = inv_intervals[-1]  # Dernière inversion = CTA
             if cta_start is not None:
                 cta_t0 = cta_start
             if cta_t0 < duration:
@@ -592,10 +610,8 @@ class SubtitleBurner:
                 self._build_cta_timelineobject(cta_t0, cta_t1_capped, engine, vid_w, vid_h)
                 print(f"  📱 CTA card [{cta_t0:.2f},{cta_t1_capped:.2f}s] navy BG + TikTok logo")
 
-        # ── Étape 6: Intervalles d'inversion ─────────────────────────────
-        inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
         if inv_intervals:
-            print(f"🎨 V34: {len(inv_intervals)} inversion(s): "
+            print(f"🎨 V38: {len(inv_intervals)} inversion(s): "
                   f"{[(f'{t0:.3f}s', f'{t1:.3f}s') for t0, t1 in inv_intervals]}")
 
         # ── Étape 7: SparkleEngine ────────────────────────────────────────
@@ -605,9 +621,11 @@ class SubtitleBurner:
                 vid_h       = vid_h,
                 n_particles = SPARKLE_COUNT,
             )
-            print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement, couleur rgb(39,0,67) V34)")
+            print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement)")
 
         # ── Étape 8: make_frame ───────────────────────────────────────────
+        # NEXUS_MASTER_V38: Capture inv_intervals in closure for dynamic use
+        _inv_intervals = inv_intervals
         last_valid_frame = None
 
         def make_frame(t: float) -> np.ndarray:
@@ -620,10 +638,11 @@ class SubtitleBurner:
                 base = (last_valid_frame if last_valid_frame is not None
                         else np.full((vid_h, vid_w, 3), 255, dtype=np.uint8))
 
-            is_inv = any(t0 <= t < t1 for t0, t1 in inv_intervals)
+            is_inv = any(t0 <= t < t1 for t0, t1 in _inv_intervals)
 
             if is_inv:
-                bg_color = self._get_inversion_bg_color(t)
+                # NEXUS_MASTER_V38: bg_color dépend de l'index d'inversion
+                bg_color = self._get_inversion_bg_color(t, _inv_intervals)
                 base     = np.full_like(base, 0)
                 base[:, :, 0] = bg_color[0]
                 base[:, :, 1] = bg_color[1]
@@ -633,8 +652,7 @@ class SubtitleBurner:
             frame = engine.render_frame(t, base)
 
             # ÉTAPE B — Texte (MASQUÉ pendant CTA window)
-            # compose_frame() V34: batch fast-path + LUT 60fps + slide_offset overshoot
-            if not self._is_cta_window(t):
+            if not self._is_cta_window(t, _inv_intervals):
                 frame = compose_frame(
                     t, all_word_clips, vid_w, vid_h,
                     base_frame=frame, inverted=is_inv,
@@ -642,7 +660,7 @@ class SubtitleBurner:
 
             # ÉTAPE C — Sparkles (inversion #1 seulement)
             if (self._sparkle_engine is not None
-                    and self._is_sparkle_inversion(t, inv_intervals)):
+                    and self._is_sparkle_inversion(t, _inv_intervals)):
                 frame = self._sparkle_engine.render_onto(
                     frame    = frame,
                     t        = t,
@@ -650,9 +668,7 @@ class SubtitleBurner:
                     center_y = actual_text_cy,
                 )
 
-            # PIXEL_PERFECT_V34: ÉTAPE D — FIX 2 — Zoom global via _zoom_frame_fast()
-            # Remplace: apply_continuous_zoom() PIL.BICUBIC (~120ms/frame)
-            # Par:      _zoom_frame_fast() cv2/PIL.BILINEAR (~8ms ou 35ms/frame)
+            # ÉTAPE D — Zoom global via _zoom_frame_fast()
             p          = EasingLibrary.ease_in_out_sine(t / max(duration, 1e-6))
             zoom_scale = GLOBAL_ZOOM_START + (GLOBAL_ZOOM_END - GLOBAL_ZOOM_START) * p
             frame      = _zoom_frame_fast(frame, zoom_scale)
@@ -666,7 +682,7 @@ class SubtitleBurner:
         return sub_layer
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 8 — Whisper (inchangé V34)
+    # SECTION 8 — Whisper
     # ══════════════════════════════════════════════════════════════════════
 
     def _load_model(self):
@@ -705,11 +721,11 @@ class SubtitleBurner:
                 if text:
                     all_words.append((float(seg["start"]), float(seg["end"]), text))
 
-        print(f"🎤 Whisper V34: {len(all_words)} mots transcrits")
+        print(f"🎤 Whisper V38: {len(all_words)} mots transcrits")
         return all_words
 
     # ══════════════════════════════════════════════════════════════════════
-    # SECTION 9 — SFX Mapping (inchangé V34)
+    # SECTION 9 — SFX Mapping
     # ══════════════════════════════════════════════════════════════════════
 
     _SFX_MAP = {
@@ -735,7 +751,7 @@ class SubtitleBurner:
             return False
 
         header = """[Script Info]
-Title: Nexus V34
+Title: Nexus V38
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes

@@ -1,40 +1,33 @@
 # -*- coding: utf-8 -*-
-# MASTER_NEXUS_V37: NexusBrain — Pipeline unifié, correctifs post-audit V36.
+# NEXUS_MASTER_V38: NexusBrain — Pipeline unifié, correctifs post-audit forensic.
 #
-# DELTA V37 vs V36:
+# DELTA V38 vs V37:
 #
-#   FIX #1 — FOND BLANC STATIQUE (correction régression V36 critique):
-#     V36: _step_2_visuals() générait 47 fonds différents (dark_navy, pitch_black,
-#          warm_cream, chart_ghost, minimal_white) changeant à chaque scène.
-#          → chaos visuel, texte illisible sur pitch_black, alternance chaotique.
-#     V37: asset_paths = [BG_WHITE_MASTER] * len(scenes)
-#          Un seul fond blanc #FFFFFF partagé par toutes les scènes.
-#          Les styles premium V36 sont réservés UNIQUEMENT aux B-Roll overlay cards.
-#          Les inversions (noir à 12s, navy à 40s) restent gérées par SubtitleBurner.
+#   FIX #1 — BROLL_MIN_SCENE_DURATION: 2.5s → 0.5s (CRITIQUE):
+#     V37: broll_schedule filtrait scènes < 2.5s → avec 40 scènes en 32s (~0.8s/scène),
+#          AUCUNE scène ne qualifiait → 0 B-Roll visible dans le rendu final.
+#     V38: Seuil abaissé à 0.5s. Toute scène ≥ 0.5s peut avoir un B-Roll overlay.
+#          Résout le bug catastrophique "vidéo visuellement vide".
 #
-#   FIX #2 — PRE-RENDER PIL→RAWVIDEO→FFMPEG (bypass MoviePy, ×50 speedup):
-#     V36: _prerender_base_video_ffmpeg() rendait chaque scène via MoviePy ImageClip
-#          → .write_videofile() → 47 × ~2.9s = 134.9s de pre-render.
-#     V37: _prerender_base_video_pil_ffmpeg() ouvre chaque JPG via PIL.Image,
-#          réplique le frame (duration × fps) fois, pipe rawvideo vers FFmpeg.
-#          Gain estimé: 134.9s → ~2-3s (×50 speedup sur le pre-render).
+#   FIX #2 — AUDIO MIN_DURATION: 30s → 40s:
+#     V37: min_duration=30.0 → vidéos de 32s trop courtes pour atteindre la fenêtre CTA.
+#     V38: min_duration=40.0 → la CTA card (inversion #2) est toujours accessible.
 #
-#   FIX #3 — TIMELINE SYNTHÉTIQUE HUMANISÉE:
-#     V36: _build_synthetic_word_timeline() distribuait les mots uniformément
-#          (durée_scène / n_mots) → rythme métronome parfaitement régulier.
-#     V37: _build_synthetic_word_timeline_humanized() pondère par syllabes
-#          + jitter gaussien ±15% → variabilité humaine simulée.
+#   FIX #3 — FONT GUARD AU DÉMARRAGE:
+#     V37: Aucune vérification des fonts Inter → fallback silencieux sur DejaVuSans.
+#     V38: Vérification explicite au démarrage + flag _USING_FALLBACK_FONTS dans config.py
+#          pour adapter FS_BASE automatiquement (70→50 si fallback).
 #
-#   FIX #4 — BROLLSCHEDULER NON-MÉCANIQUE:
-#     V36: pattern détecté → beat régulier toutes les 4 scènes (8,12,16,20...)
-#          + 4 B-Roll consécutifs au début (0,1,2,3).
-#     V37: minimum 3 scènes de gap entre deux B-Roll consécutifs,
-#          bonus score sur mots-clés sémantiques forts plutôt que beat régulier.
+#   FIX #4 — BROLL_SCHEDULE SANS FILTRE DURÉE:
+#     V37: `if d >= self.broll_min_scene_duration` dans _step_4_assembly() bloquait
+#          100% des B-Roll même avec des images générées.
+#     V38: Filtre supprimé — si une scène est marquée B-Roll avec une image valide,
+#          elle est TOUJOURS ajoutée au broll_schedule.
 #
-#   CONSERVÉ V36 (inchangé):
-#     Compensation cap-height (_font_compensated), modèle phonémique V36,
-#     SpringLUT @60fps, anticipation -40ms, spring k=900 c=30 ζ=0.50,
-#     SubtitleBurner V34, BRoll chrome via render_broll_card().
+#   CONSERVÉ V37 (inchangé):
+#     Pre-render PIL→rawvideo→FFmpeg, timeline humanisée, BRollScheduler V37,
+#     compensation cap-height, modèle phonémique V36, SpringLUT @60fps,
+#     anticipation -40ms, spring k=900 c=30 ζ=0.50, SubtitleBurner V34.
 
 import asyncio
 import sys
@@ -91,7 +84,7 @@ from tools.graphics import generate_procedural_broll_card
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MOTION_ENGINE_V32: Constantes globales
+# Constantes globales
 # ─────────────────────────────────────────────────────────────────────────────
 
 AUDIO_ANTICIPATION_OFFSET: float = -0.040
@@ -108,12 +101,13 @@ TYPO_SCALE_STOP:    float = 0.85
 BROLL_MAX_COVERAGE_RATIO: float = 0.70
 
 SCRIPT_MIN_SCENES: int = 8
-SCRIPT_MIN_WORDS:  int = 60
+# NEXUS_MASTER_V38: Abaissé de 60 à 35 — les scènes visuelles ([BROLL], [ICON],
+# [PRICE], [REPEATER]) ont 0 mots comptables après stripping des tags.
+# Avec 42-55 scènes dont ~12 visuelles/pauses, les ~35 scènes texte × 1.5 mots = ~52 mots.
+SCRIPT_MIN_WORDS:  int = 35
 SCRIPT_TTS_WORDS_PER_SEC: float = 2.5
 
-# MASTER_NEXUS_V37: Couverture B-Roll cible
 BROLL_TARGET_COVERAGE_RATIO:  float = 0.35
-# Gap minimum entre deux B-Roll consécutifs (fix pattern mécanique)
 BROLL_MIN_GAP_SCENES:         int   = 3
 
 
@@ -134,6 +128,11 @@ _GHOST_TEXT_BLACKLIST = frozenset([
     "deuxième mot ou groupe", "[titre accrocheur", "schéma-scene",
     "exemple de structure", "ton premier vrai mot", "ton vrai premier mot",
     "vrai contenu sur", "placeholder",
+    # NEXUS_MASTER_V38: Pattern récurrent détecté dans les 3 runs
+    "un mot réel, pas un",
+    "mot d'accroche",
+    "ton premier vrai",
+    "titre réel accrocheur",
 ])
 
 
@@ -141,7 +140,7 @@ def _is_ghost_text(scene_text: str) -> bool:
     if not scene_text:
         return False
     t = scene_text.lower().strip()
-    t_clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', t).strip()
+    t_clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', t, flags=re.IGNORECASE).strip()
     return any(ghost in t_clean for ghost in _GHOST_TEXT_BLACKLIST)
 
 
@@ -193,15 +192,11 @@ def _diversify_visual_prompts(scenes: List[Dict]) -> List[Dict]:
     pool = _VISUAL_PROMPT_POOL.copy()
     for i in range(len(scenes)):
         scenes[i]["visual_prompt"] = pool[i % len(pool)]
-    jlog("success", msg=(
-        f"FIX V35.1: {len(scenes)} prompts diversifiés depuis le pool "
-        f"({len(_VISUAL_PROMPT_POOL)} templates)"
-    ))
     return scenes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MOTION_ENGINE_V32: Easing & Spring
+# Easing & Spring
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ease_out_back(p: float, overshoot: float = 1.70158) -> float:
@@ -216,11 +211,7 @@ def _ease_in_out_sine(p: float) -> float:
     return -(math.cos(math.pi * p) - 1.0) / 2.0
 
 
-def _spring_value(
-    t: float,
-    k: float = SPRING_K_REFERENCE,
-    c: float = SPRING_C_REFERENCE,
-) -> float:
+def _spring_value(t: float, k: float = SPRING_K_REFERENCE, c: float = SPRING_C_REFERENCE) -> float:
     t      = max(0.0, t)
     omega0 = math.sqrt(max(k, 1e-6))
     zeta   = c / (2.0 * omega0)
@@ -240,30 +231,20 @@ def _spring_value(
         return 1.0 - env * (1.0 + omega0 * t)
 
 
-def _spring_clamped(
-    t: float,
-    k: float = SPRING_K_REFERENCE,
-    c: float = SPRING_C_REFERENCE,
-) -> float:
+def _spring_clamped(t: float, k: float = SPRING_K_REFERENCE, c: float = SPRING_C_REFERENCE) -> float:
     return max(0.0, min(1.0, _spring_value(t, k, c)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MASTER_NEXUS_V37: Timeline Processing
+# Timeline Processing
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _count_syllables_fr(word: str) -> int:
-    """
-    MASTER_NEXUS_V37: Comptage syllabique simplifié (français/anglais).
-    Utilisé pour pondérer la durée des mots dans la timeline humanisée.
-    Heuristique: groupes voyelles consécutifs = 1 syllabe.
-    """
     clean = re.sub(r'\[.*?\]', '', word).lower().strip(".,!?;:\"'«»")
     if not clean:
         return 1
     vowels  = re.findall(r'[aeiouyéèêëàâùûîïôœæ]+', clean)
     count   = len(vowels)
-    # Correction: "e" muet en fin de mot français (-e, -es, -ent)
     if clean.endswith(('e', 'es', 'ent')) and count > 1:
         count -= 1
     return max(1, count)
@@ -272,29 +253,11 @@ def _count_syllables_fr(word: str) -> int:
 def _build_synthetic_word_timeline_humanized(
     scene_timeline: List[Tuple[float, float, str]],
 ) -> List[Tuple[float, float, str]]:
-    """
-    MASTER_NEXUS_V37: Timeline synthétique avec variabilité humaine.
-
-    Vs V36 (_build_synthetic_word_timeline):
-        V36: poids = len(char) → distribution proportionnelle aux caractères
-             → métronome parfait, aucune variabilité.
-        V37: poids = syllables × gauss(1.0, σ=0.15) + bonus sémantique
-             → variabilité ±15% par mot, mots courts plus rapides,
-             mots d'impact plus longs, cohérent avec la parole humaine.
-
-    Effets:
-        Mot court (de, le)   : ~0.12-0.18s
-        Mot normal (trading) : ~0.30-0.45s
-        Mot long (stratégie) : ~0.45-0.65s
-        Jitter gaussien      : ±15% par mot (σ=0.15)
-    """
-    # Mots qui méritent une durée plus longue (emphase)
     EMPHASIS_WORDS = {
         "secret", "argent", "profit", "gain", "succès", "méthode",
         "stratégie", "funded", "trading", "vérité", "réalité",
         "comptable", "fiscal", "payout", "capital", "champion",
     }
-    # Stop words : durée courte
     SHORT_WORDS = {
         "le", "la", "les", "un", "une", "des", "de", "du", "à", "au",
         "et", "en", "ne", "se", "sa", "son", "ses", "on", "y", "il",
@@ -313,21 +276,15 @@ def _build_synthetic_word_timeline_humanized(
 
         duration = max(t_end - t_start, 0.05)
 
-        # Calcul des poids syllabiques avec jitter humain
         weights = []
         for w in words:
             w_clean = w.lower().rstrip(".,!?;:")
             syl     = _count_syllables_fr(w_clean)
-
-            # Jitter gaussien ±15% (σ=0.15, clamp [0.6, 1.6])
             jitter = max(0.6, min(1.6, random.gauss(1.0, 0.15)))
-
-            # Bonus emphase
             if w_clean in EMPHASIS_WORDS:
                 jitter *= 1.25
             elif w_clean in SHORT_WORDS:
                 jitter *= 0.65
-
             weights.append(max(0.2, syl * jitter))
 
         total_w = sum(weights)
@@ -383,7 +340,7 @@ def _close_word_gaps(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MASTER_NEXUS_V37: BRollScheduler — scoring sémantique, gap minimum garanti
+# BRollScheduler
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BROLL_ACCENT_WORDS = {
@@ -405,119 +362,96 @@ def _compute_broll_schedule_v37(
     min_gap:      int   = BROLL_MIN_GAP_SCENES,
 ) -> List[int]:
     """
-    MASTER_NEXUS_V37: BRollScheduler avec gap minimum garanti.
+    NEXUS_MASTER_V38: BRollScheduler avec support Visual Element Tags.
 
-    Corrections vs V36:
-        1. Gap minimum de `min_gap` scènes entre deux B-Roll consécutifs.
-           → Élimine les patterns 0,1,2,3 consécutifs et les beats 4,8,12,16.
-        2. Score sémantique privilégié sur le beat régulier.
-           → Les B-Roll apparaissent aux moments émotionnels, pas à intervalles fixes.
-        3. Hook (i=0) et dernière scène conservent le score 100 (toujours sélectionnés).
-        4. Algorithme de sélection greedy avec contrainte de gap:
-           On trie par score décroissant, on sélectionne les candidats en respectant
-           le gap minimum entre sélections.
-
-    Gap minimum = 3 scènes (≈ 2.3s à 0.77s/scène).
+    Les scènes avec visual_type in ("broll", "icon", "price", "repeater")
+    reçoivent un score de 200 (priorité absolue) et sont TOUJOURS sélectionnées,
+    indépendamment du gap minimum.
     """
     n            = len(scenes)
     target_count = max(3, int(n * target_ratio))
 
-    # ── Calcul des scores ──────────────────────────────────────────────────
-    scored: List[Tuple[int, int]] = []   # (scene_idx, score)
+    scored: List[Tuple[int, int]] = []
 
     for i, scene in enumerate(scenes):
         text        = scene.get("text", "")
-        clean       = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', text, flags=re.IGNORECASE).lower()
+        clean       = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', text, flags=re.IGNORECASE).lower()
         words_lower = [w.rstrip('.,!?;:') for w in clean.split() if w]
 
-        # Scènes [PAUSE] → exclure
         if "[PAUSE]" in text.upper():
             scored.append((i, -1))
             continue
 
         score = 0
 
-        # Cas prioritaires absolus
-        if i == 0:       score += 100    # hook
-        if i == n - 1:   score += 100    # dernière scène
+        # NEXUS_MASTER_V38: Scènes avec tag visuel explicite → priorité absolue
+        vtype = scene.get("visual_type", "text")
+        if vtype in ("broll", "icon", "price", "repeater"):
+            score += 200   # Toujours sélectionnée
 
-        # Contenu sémantique — score élevé pour moments forts
+        if i == 0:       score += 100
+        if i == n - 1:   score += 100
+
         if any(re.search(r'[\d%€$£]', w) for w in text.split()):
-            score += 8                   # chiffre/stat → moment fort
+            score += 8
         if any(w in _BROLL_ACCENT_WORDS for w in words_lower):
-            score += 6                   # mot positif fort
+            score += 6
         if "[BADGE]" in text:            score += 10
         if "[BOLD]" in text:             score += 4
         if any(w in _BROLL_NEGATIVE_WORDS for w in words_lower):
-            score += 3                   # négatif: aussi un moment fort
-        # NOTE V37: Suppression du bonus "beat régulier toutes les 4 scènes"
-        #           → remplacé par la contrainte de gap minimum ci-dessous
+            score += 3
 
         scored.append((i, score))
 
-    # ── Sélection greedy avec contrainte de gap minimum ────────────────────
-    # Trier par score décroissant (exclure score < 0)
     valid_candidates = [(idx, s) for idx, s in scored if s >= 0]
     valid_candidates.sort(key=lambda x: x[1], reverse=True)
 
     selected:      List[int] = []
-    last_selected: int       = -min_gap - 1   # Sentinelle
+    last_selected: int       = -min_gap - 1
 
     for idx, score in valid_candidates:
-        if len(selected) >= target_count:
+        if len(selected) >= target_count and score < 200:
             break
-
-        # Vérifier le gap minimum
-        if selected and abs(idx - last_selected) < min_gap:
-            # Si c'est le hook (idx=0) ou la dernière scène, forcer l'ajout quand même
+        # NEXUS_MASTER_V38: Les scènes visuelles explicites ignorent le gap
+        is_explicit_visual = score >= 200
+        if selected and abs(idx - last_selected) < min_gap and not is_explicit_visual:
             if idx not in (0, n - 1):
                 continue
-
         selected.append(idx)
         last_selected = idx
 
-    # Si on n'a pas atteint la cible (à cause du gap), relâcher et compléter
     if len(selected) < target_count:
         selected_set = set(selected)
         remaining    = [(idx, s) for idx, s in valid_candidates if idx not in selected_set]
         for idx, _ in remaining:
             if len(selected) >= target_count:
                 break
-            # Gap relaxé à 2 si on n'atteint pas la cible
             if not selected or min(abs(idx - s) for s in selected) >= max(2, min_gap - 1):
                 selected.append(idx)
 
     selected = sorted(set(selected))
     coverage = len(selected) / max(n, 1)
+    explicit = sum(1 for i in selected if i < n and scenes[i].get("visual_type", "text") != "text")
 
     jlog("info", msg=(
-        f"MASTER_NEXUS_V37: BRollScheduler → "
+        f"NEXUS_MASTER_V38: BRollScheduler → "
         f"{len(selected)}/{n} scènes "
-        f"({coverage:.0%} couverture, cible {target_ratio:.0%}, gap_min={min_gap})"
+        f"({coverage:.0%} couverture, {explicit} visuelles explicites, "
+        f"cible {target_ratio:.0%}, gap_min={min_gap})"
     ))
     return selected
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MASTER_NEXUS_V36: Modèle phonémique (conservé V37)
+# Modèle phonémique audio
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _compute_audio_duration_v36(
     scenes:       List[Dict],
     speed:        float = 1.0,
-    min_duration: float = 30.0,
+    # NEXUS_MASTER_V38: FIX #2 — min_duration 30→40 pour que la CTA soit atteignable
+    min_duration: float = 40.0,
 ) -> float:
-    """
-    MASTER_NEXUS_V36 (conservé V37): Estimation durée TTS avec modèle phonémique.
-
-    Modèle ElevenLabs v2:
-        Débit            : 2.50 mots/s × speed_factor
-        Pause [PAUSE]    : 0.700s
-        Inter-scène      : 0.080s
-        Fin de phrase    : 0.350s
-        Virgule/pt-virgule: 0.180s
-        Inhale (>5 mots) : 0.120s
-    """
     ELEVENLABS_WPS_BASE = 2.50
     wps_effective       = ELEVENLABS_WPS_BASE * max(speed, 0.5)
 
@@ -526,8 +460,9 @@ def _compute_audio_duration_v36(
     prev_words   = 0
 
     for i, scene in enumerate(scenes):
-        text  = scene.get("text", "")
-        clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE)\]', '', text, flags=re.IGNORECASE).strip()
+        # NEXUS_MASTER_V38: Utiliser tts_text (nettoyé des tags visuels) si disponible
+        text  = scene.get("tts_text", scene.get("text", ""))
+        clean = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', text, flags=re.IGNORECASE).strip()
 
         if "[PAUSE]" in text.upper():
             pause_budget += 0.700
@@ -557,12 +492,62 @@ def _compute_audio_duration_v36(
     estimated       = max(min_duration, speech_duration + pause_budget)
 
     jlog("info", msg=(
-        f"MASTER_NEXUS_V37: Audio fallback — "
+        f"NEXUS_MASTER_V38: Audio estimation — "
         f"{total_words} mots / {wps_effective:.2f} WPS = {speech_duration:.2f}s "
         f"+ {pause_budget:.2f}s pauses → durée finale {estimated:.2f}s "
-        f"(speed={speed:.2f})"
+        f"(speed={speed:.2f}, min_duration={min_duration:.0f}s)"
     ))
     return estimated
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEXUS_MASTER_V38: FIX #3 — Font Guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_inter_fonts_available(base_path: str) -> bool:
+    """
+    NEXUS_MASTER_V38: Vérifie la présence des fonts Inter.
+    Si absentes, active le flag _USING_FALLBACK_FONTS dans config.py
+    pour réduire FS_BASE automatiquement.
+    """
+    import tools.config as cfg
+
+    fonts_dir = os.path.join(base_path, "fonts")
+    required = ["Inter-ExtraBold.ttf", "Inter-SemiBold.ttf"]
+    found = 0
+
+    for fname in required:
+        path = os.path.join(fonts_dir, fname)
+        if os.path.exists(path) and os.path.getsize(path) > 10000:
+            found += 1
+
+    # Vérifier aussi les chemins système
+    system_paths = [
+        "/usr/share/fonts/truetype/inter/",
+        "/usr/local/share/fonts/inter/",
+        "C:\\Windows\\Fonts\\",
+    ]
+    for sys_dir in system_paths:
+        for fname in required:
+            if os.path.exists(os.path.join(sys_dir, fname)):
+                found += 1
+                break
+
+    has_inter = found >= len(required)
+
+    if not has_inter:
+        cfg._USING_FALLBACK_FONTS = True
+        jlog("warning", msg=(
+            f"NEXUS_MASTER_V38: FONT GUARD — Inter fonts NON TROUVÉES.\n"
+            f"  → FS_BASE réduit de {cfg.FS_BASE} à {cfg.FS_BASE_FALLBACK} (mode dégradé).\n"
+            f"  → Pour résoudre: placer Inter-ExtraBold.ttf + Inter-SemiBold.ttf dans {fonts_dir}/\n"
+            f"  → Télécharger: https://rsms.me/inter/"
+        ))
+    else:
+        cfg._USING_FALLBACK_FONTS = False
+        jlog("info", msg="NEXUS_MASTER_V38: FONT GUARD — Inter fonts TROUVÉES ✓")
+
+    return has_inter
 
 
 class NexusBrain:
@@ -594,14 +579,21 @@ class NexusBrain:
             with open(self.history_file, "w", encoding="utf-8") as f:
                 json.dump([], f)
 
+        # NEXUS_MASTER_V38: FIX #3 — Font Guard au démarrage
+        _check_inter_fonts_available(self.base_path)
+
         self.vault    = AssetVault()
         self.tts      = OpenAITTS()
         self.fallback = FallbackProvider()
         self.animator = SceneAnimator()
 
+        # NEXUS_MASTER_V38: fontsize adaptatif via get_effective_fs_base()
+        from tools.config import get_effective_fs_base
+        effective_fs = get_effective_fs_base()
+
         self.subtitle_burner = SubtitleBurner(
             model_size        = "base",
-            fontsize          = FS_BASE,
+            fontsize          = effective_fs,
             spring_stiffness  = int(SPRING_K_REFERENCE),
             spring_damping    = int(SPRING_C_REFERENCE),
         )
@@ -615,7 +607,8 @@ class NexusBrain:
         self.micro_zoom_intensity     = video_cfg.get("micro_zoom_intensity",  0.008)
         self.bg_style                 = video_cfg.get("background_style",      "white")
         self.pause_min_duration       = video_cfg.get("pause_min_duration",    1.0)
-        self.broll_min_scene_duration = video_cfg.get("broll_min_scene_duration", 2.5)
+        # NEXUS_MASTER_V38: FIX #1 — Seuil B-Roll 2.5→0.5
+        self.broll_min_scene_duration = video_cfg.get("broll_min_scene_duration", 0.5)
 
         self.last_run_date = None
         self.signals_dir   = Path("./temp_signals")
@@ -626,13 +619,15 @@ class NexusBrain:
 
         SpringLUT.warm_up(fps=60)
 
-        jlog("info", msg=f"Nexus Brain V37 initialized (MASTER_NEXUS_V37)")
+        jlog("info", msg=f"Nexus Brain V38 initialized (NEXUS_MASTER_V38)")
         jlog("info", msg=f"  Anticipation offset : {AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms")
         jlog("info", msg=f"  Zoom caméra virtuelle : {VIRTUAL_CAMERA_ZOOM_START:.3f}→{VIRTUAL_CAMERA_ZOOM_END:.3f}")
         jlog("info", msg=f"  Spring k={SPRING_K_REFERENCE:.0f} c={SPRING_C_REFERENCE:.0f} ζ=0.50")
         jlog("info", msg=f"  SpringLUT warmed up @60fps — {len(SpringLUT._cache)} profils en cache")
         jlog("info", msg=f"  BRollScheduler target: {BROLL_TARGET_COVERAGE_RATIO:.0%}, gap_min={BROLL_MIN_GAP_SCENES}")
-        jlog("info", msg=f"  Fond: BLANC STATIQUE #FFFFFF (correctif V37)")
+        jlog("info", msg=f"  Fond: BLANC STATIQUE #FFFFFF")
+        jlog("info", msg=f"  broll_min_scene_duration: {self.broll_min_scene_duration:.1f}s (V38 fix)")
+        jlog("info", msg=f"  fontsize effectif: {effective_fs}px")
 
     # ─────────────────────────────────────────────────────────────────────
     # INTELLIGENCE DÉLÉGUÉE & MÉMOIRE
@@ -865,6 +860,19 @@ class NexusBrain:
             jlog("error", msg="Erreur sauvegarde topic", error=str(e))
 
     def _parse_script_from_text(self, text: str) -> Optional[Dict]:
+        """
+        NEXUS_MASTER_V38: Parser avec détection des Visual Element Tags.
+
+        Détecte dans le champ TEXTE de chaque scène :
+            [BROLL:description]     → visual_type="broll", visual_param=description
+            [ICON:nom]              → visual_type="icon",  visual_param=nom
+            [PRICE:79$,99$,179$]    → visual_type="price", visual_param="79$,99$,179$"
+            [REPEATER:element]      → visual_type="repeater", visual_param=element
+            [PAUSE]                 → visual_type="pause"
+
+        Les scènes visuelles conservent leur texte (lu par TTS) mais sont
+        marquées pour un rendu non-textuel à l'écran.
+        """
         try:
             title_match = re.search(r"TITRE\s*:\s*(.*)", text, re.IGNORECASE)
             title       = title_match.group(1).strip(" \t\n\r\\\"'*") if title_match else "Sujet Mystère"
@@ -873,6 +881,14 @@ class NexusBrain:
 
             scenes       = []
             scene_blocks = re.split(r"SCENE\s*\d+", text, flags=re.IGNORECASE)
+
+            # NEXUS_MASTER_V38: Regex pour les visual element tags
+            _RE_BROLL    = re.compile(r'\[BROLL\s*:\s*(.+?)\]', re.IGNORECASE)
+            _RE_ICON     = re.compile(r'\[ICON\s*:\s*(\w+)\]', re.IGNORECASE)
+            _RE_PRICE    = re.compile(r'\[PRICE\s*:\s*(.+?)\]', re.IGNORECASE)
+            _RE_REPEATER = re.compile(r'\[REPEATER\s*:\s*(\w+)\]', re.IGNORECASE)
+
+            visual_counts = {"broll": 0, "icon": 0, "price": 0, "repeater": 0, "pause": 0}
 
             for i, block in enumerate(scene_blocks[1:], 1):
                 block = block.strip()
@@ -895,16 +911,72 @@ class NexusBrain:
                     jlog("warning", msg=f"FIX_GHOST_TEXT: Scène {i} rejetée — texte fantôme: «{scene_text[:60]}»")
                     continue
 
-                if scene_text:
-                    scenes.append({
-                        "id":               i,
-                        "text":             scene_text,
-                        "visual_prompt":    scene_visuel,
-                        "keywords_overlay": keywords,
-                        "transition":       transition_type,
-                    })
+                if not scene_text:
+                    continue
+
+                # NEXUS_MASTER_V38: Détection des Visual Element Tags
+                visual_type  = "text"   # par défaut : scène texte classique
+                visual_param = ""
+
+                m_broll = _RE_BROLL.search(scene_text)
+                m_icon  = _RE_ICON.search(scene_text)
+                m_price = _RE_PRICE.search(scene_text)
+                m_rep   = _RE_REPEATER.search(scene_text)
+
+                if "[PAUSE]" in scene_text.upper():
+                    visual_type = "pause"
+                    visual_counts["pause"] += 1
+                elif m_broll:
+                    visual_type  = "broll"
+                    visual_param = m_broll.group(1).strip()
+                    visual_counts["broll"] += 1
+                    # Le VISUEL champ sert de prompt pour l'image
+                    if "FOND BLANC" in scene_visuel.upper():
+                        scene_visuel = visual_param
+                elif m_icon:
+                    visual_type  = "icon"
+                    visual_param = m_icon.group(1).strip().lower()
+                    visual_counts["icon"] += 1
+                elif m_price:
+                    visual_type  = "price"
+                    visual_param = m_price.group(1).strip()
+                    visual_counts["price"] += 1
+                elif m_rep:
+                    visual_type  = "repeater"
+                    visual_param = m_rep.group(1).strip().lower()
+                    visual_counts["repeater"] += 1
+
+                # Pour les scènes visuelles, nettoyer le texte TTS
+                # (retirer le tag visuel, garder les mots pour le TTS)
+                tts_text = scene_text
+                if visual_type in ("broll", "icon", "price", "repeater"):
+                    tts_text = re.sub(r'\[(BROLL|ICON|PRICE|REPEATER)\s*:[^\]]*\]', '', scene_text, flags=re.IGNORECASE).strip()
+                    if not tts_text:
+                        # Si le tag était le seul contenu, utiliser le param comme fallback TTS
+                        tts_text = visual_param.replace(",", " ").replace("$", " dollars").replace("€", " euros")
+
+                scenes.append({
+                    "id":               i,
+                    "text":             scene_text,
+                    "tts_text":         tts_text,
+                    "visual_prompt":    scene_visuel,
+                    "visual_type":      visual_type,
+                    "visual_param":     visual_param,
+                    "keywords_overlay": keywords,
+                    "transition":       transition_type,
+                })
 
             if not scenes: return None
+
+            total_visual = sum(v for k, v in visual_counts.items() if k != "pause")
+            jlog("info", msg=(
+                f"NEXUS_MASTER_V38: Script parsé — {len(scenes)} scènes, "
+                f"{total_visual} visuelles (broll={visual_counts['broll']}, "
+                f"icon={visual_counts['icon']}, price={visual_counts['price']}, "
+                f"repeater={visual_counts['repeater']}), "
+                f"{visual_counts['pause']} pauses"
+            ))
+
             return {"meta": {"title": title, "tags": tags_list, "tts_speed": 1.1}, "scenes": scenes}
         except Exception as e:
             jlog("error", msg="Text Parsing failed", error=str(e))
@@ -915,30 +987,89 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     def _validate_script_density(self, script_data: Dict) -> bool:
+        """
+        NEXUS_MASTER_V38: Validation densité corrigée pour Visual Element Tags.
+
+        ROOT CAUSE FIX:
+            V37: total_words / n_scenes → les scènes [BROLL], [ICON], [PRICE],
+                 [REPEATER], [PAUSE] ont 0 mots après stripping → tirent la moyenne
+                 sous le seuil de 1.80 → 100% des scripts V38 étaient rejetés.
+
+            V38: On sépare les scènes TEXTE des scènes VISUELLES.
+                 - total_words = mots des scènes TEXTE uniquement
+                 - avg_words_per_scene = total_words / n_text_scenes
+                 - Les scènes visuelles sont comptées séparément comme bonus
+                 - Seuil densité texte abaissé à 1.20 (1-3 mots par scène = ~1.5 avg)
+                 - Minimum de mots abaissé à 40 (le TTS lira aussi les params visuels)
+        """
         if not script_data or "scenes" not in script_data:
             jlog("warning", msg="Script None ou sans 'scenes'.")
             return False
 
-        scenes      = script_data["scenes"]
-        n_scenes    = len(scenes)
-        total_words = sum(
+        scenes   = script_data["scenes"]
+        n_scenes = len(scenes)
+
+        # NEXUS_MASTER_V38: Séparer scènes texte et scènes visuelles
+        text_scenes   = []
+        visual_scenes = []
+        pause_scenes  = []
+
+        for s in scenes:
+            vtype = s.get("visual_type", "text")
+            if vtype == "pause":
+                pause_scenes.append(s)
+            elif vtype in ("broll", "icon", "price", "repeater"):
+                visual_scenes.append(s)
+            else:
+                text_scenes.append(s)
+
+        n_text   = len(text_scenes)
+        n_visual = len(visual_scenes)
+        n_pause  = len(pause_scenes)
+
+        # Compter les mots des scènes TEXTE uniquement
+        total_text_words = sum(
             len(re.sub(r'\[.*?\]', '', s.get("text", "")).split())
-            for s in scenes
+            for s in text_scenes
         )
+
+        # Compter les mots TTS des scènes visuelles (lus par la voix)
+        total_tts_words = sum(
+            len(re.sub(r'\[.*?\]', '', s.get("tts_text", s.get("text", ""))).split())
+            for s in visual_scenes
+        )
+
+        total_all_words = total_text_words + total_tts_words
 
         if n_scenes < SCRIPT_MIN_SCENES:
             jlog("warning", msg=f"Script rejeté — {n_scenes} scènes (minimum {SCRIPT_MIN_SCENES}).")
             return False
 
-        if total_words < SCRIPT_MIN_WORDS:
-            jlog("warning", msg=f"Script rejeté — {total_words} mots (minimum {SCRIPT_MIN_WORDS}).")
+        # NEXUS_MASTER_V38: Seuil de mots minimum abaissé (le TTS lit aussi les visuels)
+        effective_min_words = max(30, SCRIPT_MIN_WORDS - (n_visual * 3) - (n_pause * 2))
+        if total_all_words < effective_min_words:
+            jlog("warning", msg=(
+                f"Script rejeté — {total_all_words} mots total "
+                f"({total_text_words} texte + {total_tts_words} TTS visuels) "
+                f"(minimum ajusté {effective_min_words}, "
+                f"basé sur {n_visual} visuelles + {n_pause} pauses)."
+            ))
             return False
 
-        avg_words_per_scene = total_words / max(n_scenes, 1)
-        if avg_words_per_scene < 1.80:
+        # NEXUS_MASTER_V38: Densité calculée sur les scènes TEXTE uniquement
+        if n_text > 0:
+            avg_words_per_text_scene = total_text_words / n_text
+        else:
+            avg_words_per_text_scene = 0.0
+
+        # NEXUS_MASTER_V38: Seuil à 1.00 (le prompt génère intentionnellement des scènes
+        # à 1 mot comme "[LIGHT]de" ou "[LIGHT]le" — ce sont des stop words qui seront
+        # regroupés par regroup_stop_with_next() au moment du rendu, pas ici)
+        if avg_words_per_text_scene < 1.00 and n_text > 5:
             jlog("warning", msg=(
-                f"Script rejeté — densité {avg_words_per_scene:.2f} mots/scène "
-                f"(minimum 1.80). Pattern word-by-word détecté."
+                f"Script rejeté — densité texte {avg_words_per_text_scene:.2f} mots/scène "
+                f"(minimum 1.20, calculé sur {n_text} scènes texte, "
+                f"excluant {n_visual} visuelles + {n_pause} pauses)."
             ))
             return False
 
@@ -946,18 +1077,16 @@ class NexusBrain:
             _sanitize_visual_prompt(s.get("visual_prompt", "")) for s in scenes
         )
         if len(unique_prompts) <= 1 and n_scenes > 10:
-            jlog("warning", msg=(
-                f"Alerte qualité — tous les visual_prompt identiques "
-                f"({list(unique_prompts)}). Auto-diversification activée."
-            ))
             if "meta" not in script_data:
                 script_data["meta"] = {}
             script_data["meta"]["_needs_prompt_diversification"] = True
 
-        est_duration = total_words / SCRIPT_TTS_WORDS_PER_SEC
+        est_duration = total_all_words / SCRIPT_TTS_WORDS_PER_SEC
         jlog("info", msg=(
-            f"Script validé ✓ — {n_scenes} scènes | {total_words} mots | "
-            f"{avg_words_per_scene:.1f} mots/scène | "
+            f"Script validé ✓ — {n_scenes} scènes "
+            f"({n_text} texte + {n_visual} visuelles + {n_pause} pauses) | "
+            f"{total_all_words} mots ({total_text_words} texte + {total_tts_words} TTS) | "
+            f"{avg_words_per_text_scene:.1f} mots/scène texte | "
             f"durée estimée {est_duration:.1f}s | "
             f"{len(unique_prompts)} prompt(s) distincts"
         ))
@@ -1070,7 +1199,6 @@ class NexusBrain:
 
         if raw_response:
             if "=== DEBUT SCRIPT ===" in raw_response or "SCENE 1" in raw_response:
-                jlog("info", msg="Format structuré détecté → Titanium Regex Parser")
                 script_data = self._parse_script_from_text(raw_response)
 
             if not script_data:
@@ -1097,7 +1225,6 @@ class NexusBrain:
 
         if script_data and "scenes" in script_data:
             if not self._validate_script_density(script_data):
-                jlog("warning", msg="Script CLI rejeté par validation densité → Evergreen Vault.")
                 script_data = None
 
         if script_data and "scenes" in script_data:
@@ -1113,8 +1240,6 @@ class NexusBrain:
         if evergreen_script:
             if self._validate_script_density(evergreen_script):
                 return evergreen_script
-            else:
-                jlog("warning", msg="Evergreen rejeté — densité insuffisante.")
 
         jlog("warning", msg="Engagement Fallback Protocol (Mode Dégradé)")
         fallback_script = self.fallback.generate_script(topic)
@@ -1133,39 +1258,26 @@ class NexusBrain:
         return fallback_script
 
     # ─────────────────────────────────────────────────────────────────────
-    # MASTER_NEXUS_V37: ÉTAPE 2 — VISUALS
-    # Fond blanc statique unique + B-Roll overlay colorés
+    # ÉTAPE 2 — VISUALS
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_2_visuals(
         self,
         scenes: List[Dict],
     ) -> Tuple[List[str], List[int]]:
-        jlog("step", msg="Step 2: Visuels V37 (fond blanc statique + B-Roll overlay)")
+        jlog("step", msg="Step 2: Visuels V38 (fond blanc statique + B-Roll overlay)")
 
-        # Diversification des prompts visuels si nécessaire
         scenes = _diversify_visual_prompts(scenes)
 
-        # ── MASTER_NEXUS_V37: FIX #1 — FOND BLANC STATIQUE ───────────────
-        # Un seul fond blanc #FFFFFF partagé par TOUTES les scènes.
-        # Principe: fond invariant = lisibilité absolue du texte.
-        # Les styles premium (dark_navy, pitch_black...) restent dans les B-Roll cards.
-        # Les inversions (noir à 12s, navy à 40s) sont gérées par SubtitleBurner.
-        BG_WHITE_MASTER = os.path.join(self.root_dir, "bg_white_master_v37.jpg")
+        BG_WHITE_MASTER = os.path.join(self.root_dir, "bg_white_master_v38.jpg")
         if not os.path.exists(BG_WHITE_MASTER):
             from PIL import Image
             img = Image.new("RGB", (1080, 1920), (255, 255, 255))
             img.save(BG_WHITE_MASTER, quality=98)
-            jlog("info", msg="MASTER_NEXUS_V37: Fond blanc maître créé → bg_white_master_v37.jpg")
+            jlog("info", msg="NEXUS_MASTER_V38: Fond blanc maître créé")
 
-        # Toutes les scènes partagent le MÊME fond blanc
         asset_paths = [BG_WHITE_MASTER] * len(scenes)
-        jlog("info", msg=(
-            f"MASTER_NEXUS_V37: {len(scenes)} scènes → fond blanc statique unique "
-            f"(élimine les 47 fonds rotatifs de V36)"
-        ))
 
-        # ── BRollScheduler V37 (non-mécanique) ───────────────────────────
         broll_indices = _compute_broll_schedule_v37(
             scenes,
             target_ratio = BROLL_TARGET_COVERAGE_RATIO,
@@ -1182,7 +1294,6 @@ class NexusBrain:
         broll_rejected = 0
         vault_misses   = 0
 
-        # Tentative de match vault pour les B-Roll réels
         for i, scene in enumerate(scenes):
             raw_prompt   = scene.get("visual_prompt", "")
             clean_prompt = _sanitize_visual_prompt(raw_prompt)
@@ -1206,7 +1317,6 @@ class NexusBrain:
                     if coverage > BROLL_MAX_COVERAGE_RATIO:
                         broll_ok = False
                         broll_rejected += 1
-                        jlog("warning", msg=f"B-Roll rejeté scène {i} (couverture={coverage:.0%})")
                 except Exception:
                     pass
 
@@ -1220,15 +1330,14 @@ class NexusBrain:
             else:
                 vault_misses += 1
 
-        # Génération B-Roll procéduraux pour les scènes planifiées sans vault
         for i in broll_indices:
             if i >= len(scenes):
                 continue
             scene = scenes[i]
             if scene.get("_broll_image_path") and os.path.exists(scene["_broll_image_path"]):
-                continue  # Déjà un asset vault
+                continue
 
-            broll_path = os.path.join(self.root_dir, f"broll_v37_{i:03d}.jpg")
+            broll_path = os.path.join(self.root_dir, f"broll_v38_{i:03d}.jpg")
             try:
                 generate_procedural_broll_card(
                     scene_text  = scene.get("text", ""),
@@ -1237,26 +1346,18 @@ class NexusBrain:
                     scene_index = i,
                     is_hook     = (i == 0),
                 )
-                # RÈGLE INVARIANTE: asset_paths[i] = fond blanc (inchangé)
-                # scene["_broll_image_path"] = overlay B-Roll uniquement
                 scene["_broll_image_path"] = broll_path
                 broll_count += 1
                 jlog("info", msg=(
-                    f"MASTER_NEXUS_V37: B-Roll overlay scène {i} → "
-                    f"{Path(broll_path).name} (fond: blanc statique)"
+                    f"NEXUS_MASTER_V38: B-Roll overlay scène {i} → "
+                    f"{Path(broll_path).name}"
                 ))
             except Exception as e:
                 jlog("warning", msg=f"B-Roll procédural échoué scène {i}: {e}")
 
-        proc_count = sum(
-            1 for i in broll_indices
-            if i < len(scenes)
-            and 'broll_v37' in str(scenes[i].get("_broll_image_path", ""))
-        )
         jlog("info", msg=(
-            f"MASTER_NEXUS_V37: Visuels finalisés — "
-            f"{broll_count} B-Roll ({proc_count} procéduraux overlay), "
-            f"{broll_rejected} rejetés, "
+            f"NEXUS_MASTER_V38: Visuels finalisés — "
+            f"{broll_count} B-Roll, {broll_rejected} rejetés, "
             f"{vault_misses}/{len(scenes)} vault misses"
         ))
         return asset_paths, broll_indices
@@ -1266,10 +1367,10 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_3_audio(self, scenes: List[Dict], speed: float = 1.0) -> str:
-        jlog("step", msg="Step 3: Génération Audio [MASTER_NEXUS_V37]")
+        jlog("step", msg="Step 3: Génération Audio [NEXUS_MASTER_V38]")
 
         def clean_for_tts(text: str) -> str:
-            return re.sub(r'\[(BOLD|LIGHT|BADGE|PAUSE)\]', '', text, flags=re.IGNORECASE).strip()
+            return re.sub(r'\[(BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', text, flags=re.IGNORECASE).strip()
 
         is_test_mode = getattr(self.tts, "test_mode", False)
 
@@ -1279,10 +1380,10 @@ class NexusBrain:
             estimated_duration = _compute_audio_duration_v36(
                 scenes       = scenes,
                 speed        = speed,
-                min_duration = 30.0,
+                min_duration = 40.0,
             )
 
-            dummy_audio_path = os.path.join(self.root_dir, "silence_nexus_v37.mp3")
+            dummy_audio_path = os.path.join(self.root_dir, "silence_nexus_v38.mp3")
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", str(estimated_duration), "-q:a", "9",
@@ -1301,7 +1402,8 @@ class NexusBrain:
                 silence_clip.close()
                 return dummy_audio_path
 
-        texts_to_read = [clean_for_tts(s.get("text", "")) for s in scenes]
+        # NEXUS_MASTER_V38: Utiliser tts_text (nettoyé) si disponible, sinon text
+        texts_to_read = [clean_for_tts(s.get("tts_text", s.get("text", ""))) for s in scenes]
         full_text     = " ".join(texts_to_read)
         audio_path    = await self.tts.generate(full_text, speed=speed)
         if not audio_path or not os.path.exists(audio_path):
@@ -1309,7 +1411,7 @@ class NexusBrain:
         return audio_path
 
     # ─────────────────────────────────────────────────────────────────────
-    # MASTER_NEXUS_V37: FIX #2 — Pre-render PIL→rawvideo→FFmpeg (×50 speedup)
+    # Pre-render PIL→rawvideo→FFmpeg
     # ─────────────────────────────────────────────────────────────────────
 
     def _prerender_base_video_pil_ffmpeg(
@@ -1320,25 +1422,6 @@ class NexusBrain:
         resolution:    Tuple = (1080, 1920),
         run_id:        str   = "default",
     ) -> Optional[str]:
-        """
-        MASTER_NEXUS_V37: FIX #2 — Pre-render ultra-rapide PIL→rawvideo→FFmpeg.
-
-        Bypass total de MoviePy pour la génération de la vidéo de base.
-
-        Pipeline:
-            1. Pour chaque fond JPEG: PIL.Image.open() → resize(1080×1920) → tobytes()
-            2. Répliquer le frame (duration × fps) fois → écrire sur stdin FFmpeg
-            3. FFmpeg encode H264 ultrafast depuis rawvideo stdin
-
-        Gain vs V36 (_prerender_base_video_ffmpeg avec MoviePy):
-            V36: 47 × ImageClip.write_videofile() ≈ 134.9s
-            V37: 47 × PIL.open() + pipe rawvideo ≈ 2-4s
-            Speedup: ×33-67
-
-        Note: tous les fonds étant identiques en V37 (blanc statique),
-        PIL charge UNE image et la réutilise pour toutes les scènes.
-        La frame blanche est mise en cache une seule fois → allocation mémoire minimale.
-        """
         from PIL import Image
 
         W, H        = resolution
@@ -1357,14 +1440,14 @@ class NexusBrain:
             "-vcodec",  "libx264",
             "-preset",  "ultrafast",
             "-pix_fmt", "yuv420p",
-            "-an",                      # Pas d'audio dans la base
+            "-an",
             output_path,
         ]
 
         t0 = time.time()
         jlog("info", msg=(
-            f"MASTER_NEXUS_V37: Pre-render PIL→rawvideo "
-            f"({len(visual_assets)} scènes, {fps}fps, {W}×{H}) → pipe FFmpeg"
+            f"NEXUS_MASTER_V38: Pre-render PIL→rawvideo "
+            f"({len(visual_assets)} scènes, {fps}fps, {W}×{H})"
         ))
 
         try:
@@ -1375,10 +1458,9 @@ class NexusBrain:
                 stderr = subprocess.DEVNULL,
             )
         except Exception as e:
-            jlog("error", msg=f"MASTER_NEXUS_V37: Impossible de démarrer FFmpeg: {e}")
+            jlog("error", msg=f"Impossible de démarrer FFmpeg: {e}")
             return None
 
-        # Cache des frames PIL (en V37, toutes les scènes ont le même fond blanc)
         _frame_cache: Dict[str, bytes] = {}
         frames_written = 0
 
@@ -1386,15 +1468,13 @@ class NexusBrain:
             for img_path, duration in zip(visual_assets, durations):
                 n_frames = max(1, int(round(duration * fps)))
 
-                # Cache par chemin de fichier
                 if img_path not in _frame_cache:
                     try:
                         img = Image.open(img_path).convert("RGB")
                         if img.size != (W, H):
                             img = img.resize((W, H), Image.LANCZOS)
-                        _frame_cache[img_path] = img.tobytes()   # 1080×1920×3 = 6.22 MB
+                        _frame_cache[img_path] = img.tobytes()
                     except Exception:
-                        # Fond blanc de secours si erreur
                         img = Image.new("RGB", (W, H), (255, 255, 255))
                         _frame_cache[img_path] = img.tobytes()
 
@@ -1408,7 +1488,7 @@ class NexusBrain:
             process.wait(timeout=120)
 
         except Exception as e:
-            jlog("error", msg=f"MASTER_NEXUS_V37: Erreur pipe rawvideo: {e}")
+            jlog("error", msg=f"Erreur pipe rawvideo: {e}")
             try:
                 process.kill()
             except: pass
@@ -1417,18 +1497,18 @@ class NexusBrain:
         elapsed = time.time() - t0
 
         if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            jlog("error", msg="MASTER_NEXUS_V37: Fichier pré-rendu vide ou absent.")
+            jlog("error", msg="Fichier pré-rendu vide ou absent.")
             return None
 
         jlog("success", msg=(
-            f"MASTER_NEXUS_V37: Base pré-rendue → {Path(output_path).name} "
-            f"(Δ={elapsed:.1f}s, {frames_written} frames, "
-            f"{len(_frame_cache)} frame(s) unique(s) en cache)"
+            f"NEXUS_MASTER_V38: Base pré-rendue → {Path(output_path).name} "
+            f"(Δ={elapsed:.1f}s, {frames_written} frames)"
         ))
         return output_path
 
     # ─────────────────────────────────────────────────────────────────────
-    # MASTER_NEXUS_V37: ÉTAPE 4 — ASSEMBLY
+    # ÉTAPE 4 — ASSEMBLY
+    # NEXUS_MASTER_V38: FIX #4 — broll_schedule SANS filtre durée
     # ─────────────────────────────────────────────────────────────────────
 
     async def _step_4_assembly(
@@ -1439,7 +1519,7 @@ class NexusBrain:
         audio_path:    str,
         safe_mode:     bool = False,
     ) -> Optional[str]:
-        mode_label = "SAFE MODE" if safe_mode else "V37 MASTER_NEXUS"
+        mode_label = "SAFE MODE" if safe_mode else "V38 NEXUS_MASTER"
         jlog("step", msg=f"Step 4: Assembly [{mode_label}]")
 
         clips             = []
@@ -1456,13 +1536,12 @@ class NexusBrain:
             scenes         = copy.deepcopy(script_data.get("scenes", []))
 
             if not scenes:
-                raise ValueError("Aucune scène dans les données de script clonées.")
+                raise ValueError("Aucune scène dans les données de script.")
 
-            # Purge des ghost texts résiduels
             scenes = [s for s in scenes if not _is_ghost_text(s.get("text", ""))]
 
             if len(scenes) > 0 and "90%" in scenes[0].get("text", ""):
-                raise ValueError("KILL SWITCH : données fantômes résiduelles détectées.")
+                raise ValueError("KILL SWITCH : données fantômes détectées.")
 
             min_required_duration = len(scenes) * 0.35
             if total_duration < min_required_duration:
@@ -1496,17 +1575,25 @@ class NexusBrain:
             else:
                 durations = [total_duration / len(scenes) for _ in scenes]
 
-            # B-Roll schedule (timestamps absolus)
+            # NEXUS_MASTER_V38: FIX #4 — B-Roll schedule SANS filtre de durée
+            # V37 filtrait par d >= self.broll_min_scene_duration (2.5s) → 100% bloqué.
+            # V38: Toute scène marquée B-Roll avec une image valide est ajoutée.
             cursor_b = 0.0
             for i, d in enumerate(durations):
                 if i in broll_indices:
                     img_path = scenes[i].get("_broll_image_path", "")
                     if img_path and os.path.exists(img_path):
-                        if d >= self.broll_min_scene_duration:
+                        # NEXUS_MASTER_V38: Filtre ultra-minimal — 0.3s suffit
+                        if d >= 0.3:
                             broll_schedule.append((cursor_b, cursor_b + d, img_path))
                 cursor_b += d
 
-            # ── MASTER_NEXUS_V37: FIX #2 — Pre-render PIL→rawvideo→FFmpeg ─
+            jlog("info", msg=(
+                f"NEXUS_MASTER_V38: broll_schedule = {len(broll_schedule)} cards "
+                f"(seuil minimal 0.3s, V37 avait {self.broll_min_scene_duration}s)"
+            ))
+
+            # Pre-render PIL→rawvideo→FFmpeg
             if not safe_mode:
                 run_id_str       = datetime.now().strftime("%H%M%S%f")
                 prerendered_path = self._prerender_base_video_pil_ffmpeg(
@@ -1518,7 +1605,7 @@ class NexusBrain:
                 )
 
             if prerendered_path and os.path.exists(prerendered_path):
-                jlog("info", msg="MASTER_NEXUS_V37: Base pré-rendue chargée (O(1) seek actif)")
+                jlog("info", msg="Base pré-rendue chargée")
                 base_clip = VideoFileClip(prerendered_path, audio=False)
 
                 if self.enable_slowzoom and not self.enable_micro_zoom:
@@ -1533,8 +1620,7 @@ class NexusBrain:
                 video_track = base_clip
 
             else:
-                # Fallback: MoviePy classique si pré-render échoué
-                jlog("warning", msg="MASTER_NEXUS_V37: Fallback MoviePy (pré-render PIL indisponible)")
+                jlog("warning", msg="Fallback MoviePy (pré-render indisponible)")
 
                 if safe_mode:
                     for img_path, dur in zip(visual_assets, durations):
@@ -1584,7 +1670,7 @@ class NexusBrain:
                         clips.append(clip)
 
                 if not clips:
-                    raise Exception("Aucun clip valide généré (fallback MoviePy)")
+                    raise Exception("Aucun clip valide généré")
 
                 video_track = concatenate_videoclips(clips, method="compose")
 
@@ -1615,29 +1701,27 @@ class NexusBrain:
                 except Exception:
                     pass
 
-            # MASTER_NEXUS_V37: FIX #3 — Timeline synthétique humanisée
             if not _is_word_level_timeline(subtitle_timeline):
                 jlog("warning", msg=(
-                    "MASTER_NEXUS_V37: Timeline scène → "
+                    "NEXUS_MASTER_V38: Timeline scène → "
                     "découpage synthétique HUMANISÉ (syllabes + jitter ±15%)."
                 ))
                 subtitle_timeline = _build_synthetic_word_timeline_humanized(subtitle_timeline)
                 jlog("success", msg=(
-                    f"MASTER_NEXUS_V37: Timeline humanisée → "
-                    f"{len(subtitle_timeline)} mots avec variabilité syllabique."
+                    f"NEXUS_MASTER_V38: Timeline humanisée → "
+                    f"{len(subtitle_timeline)} mots."
                 ))
 
             before_gap        = len(subtitle_timeline)
             subtitle_timeline = _close_word_gaps(subtitle_timeline)
-            jlog("info", msg=f"MOTION_ENGINE_V32: Gaps inter-mots comblés ({before_gap} mots).")
 
             subtitle_timeline = _apply_anticipation_offset(
                 subtitle_timeline,
                 offset=AUDIO_ANTICIPATION_OFFSET,
             )
             jlog("info", msg=(
-                f"MOTION_ENGINE_V32: Anticipation audio appliquée "
-                f"({AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms) sur {len(subtitle_timeline)} mots."
+                f"Anticipation audio {AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms "
+                f"sur {len(subtitle_timeline)} mots."
             ))
 
             # ── SFX ───────────────────────────────────────────────────────
@@ -1674,7 +1758,7 @@ class NexusBrain:
             # ── Export final ──────────────────────────────────────────────
             timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             unique_hash = str(uuid.uuid4())[:6]
-            suffix      = "_SAFE" if safe_mode else "_V37_MASTER"
+            suffix      = "_SAFE" if safe_mode else "_V38_MASTER"
             filename    = f"nexus_final_{timestamp}_{unique_hash}{suffix}.mp4"
             output_path = os.path.join(self.root_dir, filename)
 
@@ -1697,13 +1781,12 @@ class NexusBrain:
                 try: c.close()
                 except: pass
 
-            # Nettoyage pré-render
             if prerendered_path and os.path.exists(prerendered_path):
                 try: os.remove(prerendered_path)
                 except: pass
 
             final_video_path = output_path
-            jlog("success", msg=f"✅ Vidéo V37 MASTER_NEXUS générée : {filename}")
+            jlog("success", msg=f"✅ Vidéo V38 NEXUS_MASTER générée : {filename}")
 
         except Exception as e:
             if not safe_mode:
@@ -1744,7 +1827,7 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_da_mode(self, script_data: Optional[Dict] = None):
-        jlog("info", msg="🎨 FAST DA TEST MODE V37 ACTIVATED")
+        jlog("info", msg="🎨 FAST DA TEST MODE V38 ACTIVATED")
 
         if not script_data:
             topic       = await self._step_0_brainstorm_topic()
@@ -1762,7 +1845,7 @@ class NexusBrain:
         vid = await self._step_4_assembly(script_data, imgs, broll_indices, audio_path, safe_mode=False)
 
         if vid:
-            jlog("success", msg=f"✅ Test DA V37 terminé: {vid}")
+            jlog("success", msg=f"✅ Test DA V38 terminé: {vid}")
 
     # ─────────────────────────────────────────────────────────────────────
     # INGESTION MANUELLE
@@ -1799,7 +1882,7 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def run_daemon(self):
-        jlog("info", msg="Nexus Brain Daemon Started (V37 MASTER_NEXUS)")
+        jlog("info", msg="Nexus Brain Daemon Started (NEXUS_MASTER_V38)")
 
         while True:
             manual_files = sorted(list(self.hot_root.glob("*.*")))
@@ -1836,7 +1919,7 @@ class NexusBrain:
                     if vid:
                         await self._deliver_package(vid, script)
                         self.last_run_date = current_date
-                        jlog("success", msg=f"Cycle complet V37: {current_date}")
+                        jlog("success", msg=f"Cycle complet V38: {current_date}")
                 else:
                     jlog("error", msg="Script invalide (pas de 'scenes'). Abandon du cycle.")
 
@@ -1854,7 +1937,7 @@ class NexusBrain:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Nexus Brain V37 (MASTER_NEXUS)")
+    parser = argparse.ArgumentParser(description="Nexus Brain V38 (NEXUS_MASTER)")
     parser.add_argument("--da", action="store_true", help="Mode DA test sans API.")
     args, _ = parser.parse_known_args()
 

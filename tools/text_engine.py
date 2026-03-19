@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
-# ARCHITECTURE_MASTER_V23: Moteur de classification et de style du texte — CORRIGÉ.
+# NEXUS_MASTER_V38: Moteur de classification et de style du texte.
 #
-# DELTA V23 vs V22:
-#   1. get_word_style() utilise FS_ACCENT_SCALE=1.45 (mesuré 1.52, codé 1.45)
-#      V22 avait 1.10× — NETTEMENT sous-évalué selon les mesures.
-#   2. TEXT_DIM_RGB corrigé: 150,150,150 (V22 avait 103,103,103 trop sombre)
-#   3. STOP_WORDS enrichi (plus fréquents = meilleure classification)
-#   4. Nouveau: classify_word() détecte maintenant les BADGE par patterns regex
-#      plus robustes (e.g. "500$" sans espace, "1000€")
+# DELTA V38 vs V23:
+#
+#   FIX #1 — regroup_stop_with_next() (NOUVEAU):
+#     V23: split_to_single_words() décompose TOUT en mots uniques.
+#          "le meilleur" → ["le", "meilleur"] affichés séquentiellement.
+#     V38: regroup_stop_with_next() fusionne article/préposition + mot suivant
+#          "le meilleur" → ["le meilleur"] affiché comme un bloc.
+#          Préserve le timing: t_start du premier, t_end du second.
+#
+#   FIX #2 — get_word_style() utilise get_effective_fs_base():
+#     V23: FS_BASE hardcodé = toujours 70px même avec font fallback.
+#     V38: get_effective_fs_base() retourne 50px si font dégradée.
+#
+#   CONSERVÉ V23:
+#     classify_word(), WordClass, split_to_single_words(), group_into_phrases().
 
 from __future__ import annotations
 import re
@@ -18,6 +26,7 @@ from .config import (
     STOP_WORDS, KEYWORDS_ACCENT, KEYWORDS_MUTED, IMPACT_WORDS, RE_NUMERIC,
     FS_BASE, FS_MIN,
     FS_ACCENT_SCALE, FS_STOP_SCALE, FS_MUTED_SCALE, FS_BADGE_SCALE, FS_BOLD_SCALE,
+    get_effective_fs_base,
 )
 
 
@@ -26,28 +35,20 @@ from .config import (
 # ══════════════════════════════════════════════════════════════════════════════
 
 class WordClass:
-    STOP   = "STOP"     # Stop word → gris clair (150,150,150), regular
-    NORMAL = "NORMAL"   # Standard  → quasi-noir (25,25,25), semibold
-    ACCENT = "ACCENT"   # Positif   → gradient rose-chaud, bold, +45%
-    MUTED  = "MUTED"    # Négatif   → rouge (220,40,35), bold, +10%
-    BADGE  = "BADGE"    # Chiffre   → vert (0,208,132), bold, +25%
-    PAUSE  = "PAUSE"    # Silence   → aucun rendu
+    STOP   = "STOP"
+    NORMAL = "NORMAL"
+    ACCENT = "ACCENT"
+    MUTED  = "MUTED"
+    BADGE  = "BADGE"
+    PAUSE  = "PAUSE"
 
 
-# ARCHITECTURE_MASTER_V23: Regex BADGE élargi (gère "1000€", "50k", "179$", etc.)
 RE_BADGE = re.compile(r'[\d\$€£%]|^\d+[kKmM]?$|^\d+[\.,]\d+$', re.IGNORECASE)
 
 def classify_word(text: str) -> str:
     """
-    ARCHITECTURE_MASTER_V23: Classification sémantique mot.
-
-    Priorité:
-        1. PAUSE   (marqueur explicite ou "…")
-        2. BADGE   (chiffres, devises, pourcentages)
-        3. MUTED   (mots négatifs — prioritaire sur ACCENT)
-        4. ACCENT  (mots positifs + impact words)
-        5. STOP    (articles, prépositions, etc.)
-        6. NORMAL  (tout le reste)
+    Classification sémantique mot.
+    Priorité: PAUSE > BADGE > MUTED > ACCENT > STOP > NORMAL
     """
     if not text:
         return WordClass.NORMAL
@@ -55,51 +56,37 @@ def classify_word(text: str) -> str:
     raw = text.strip()
     clean = re.sub(r'\[.*?\]', '', raw).strip().lower().rstrip(".,!?:;'\"«»")
 
-    # ── 1. PAUSE ─────────────────────────────────────────────────────────────
     if "[PAUSE]" in raw.upper() or raw in ("…", "...", "—"):
         return WordClass.PAUSE
 
-    # ── 2. BADGE (chiffres, devises) ─────────────────────────────────────────
-    # ARCHITECTURE_MASTER_V23: utilise regex élargi vs simple RE_NUMERIC
     if RE_BADGE.search(raw):
         return WordClass.BADGE
 
-    # ── 3. MUTED (négatif — prioritaire sur ACCENT) ──────────────────────────
     if clean in KEYWORDS_MUTED:
         return WordClass.MUTED
 
-    # ── 4. ACCENT (positif + impact) ─────────────────────────────────────────
     if clean in KEYWORDS_ACCENT or clean in IMPACT_WORDS:
         return WordClass.ACCENT
 
-    # ── 5. STOP ──────────────────────────────────────────────────────────────
     if clean in STOP_WORDS:
         return WordClass.STOP
 
     return WordClass.NORMAL
 
 
-def get_word_style(word_class: str, base_size: int) -> Tuple[int, str, tuple, bool]:
+def get_word_style(word_class: str, base_size: int = None) -> Tuple[int, str, tuple, bool]:
     """
-    ARCHITECTURE_MASTER_V23: Retourne (fontsize, weight, color, use_gradient).
+    NEXUS_MASTER_V38: Retourne (fontsize, weight, color, use_gradient).
+    Utilise get_effective_fs_base() pour adapter la taille à la font active.
+    """
+    if base_size is None:
+        base_size = get_effective_fs_base()
 
-    Calibration CORRIGÉE depuis mesures référence:
-    ┌────────────────────┬──────────────┬──────────────┬──────────────────────┐
-    │ Classe             │ Scale V22    │ Scale V23    │ Source               │
-    ├────────────────────┼──────────────┼──────────────┼──────────────────────┤
-    │ STOP               │ ×0.85        │ ×0.85        │ (confirmé)           │
-    │ NORMAL             │ ×1.00        │ ×1.00        │ (confirmé)           │
-    │ ACCENT             │ ×1.10        │ ×1.45        │ mesuré 41/27=1.52    │
-    │ MUTED              │ ×1.10        │ ×1.10        │ (pas de mesure diff) │
-    │ BADGE              │ ×1.25        │ ×1.25        │ (confirmé)           │
-    └────────────────────┴──────────────┴──────────────┴──────────────────────┘
-    """
     if word_class == WordClass.STOP:
         return (max(FS_MIN, int(base_size * FS_STOP_SCALE)), "regular",  TEXT_DIM_RGB, False)
     if word_class == WordClass.NORMAL:
         return (max(FS_MIN, int(base_size * 1.00)),          "semibold", TEXT_RGB,     False)
     if word_class == WordClass.ACCENT:
-        # ARCHITECTURE_MASTER_V23: scale 1.45 (CORRIGÉ depuis 1.10)
         return (max(FS_MIN, int(base_size * FS_ACCENT_SCALE)), "bold",   TEXT_RGB,     True)
     if word_class == WordClass.MUTED:
         return (max(FS_MIN, int(base_size * FS_MUTED_SCALE)), "bold",    MUTED_RGB,    False)
@@ -116,13 +103,8 @@ def split_to_single_words(
     timeline: List[Tuple[float, float, str]],
 ) -> List[Tuple[float, float, str]]:
     """
-    ARCHITECTURE_MASTER_V23: Découpage mot-à-mot.
-
-    La référence montre UN mot à la fois, timing exactement calqué sur Whisper.
-    Si un chunk multi-mots arrive, on le redécoupe en proportionnant sur chars.
-
-    ARCHITECTURE_MASTER_V23: AMÉLIORATION — détection des marqueurs inline:
-    [BOLD], [LIGHT], [BADGE], [PAUSE] sont préservés avec le mot adjacent.
+    Découpage mot-à-mot.
+    La référence montre UN mot à la fois, timing calqué sur Whisper.
     """
     result = []
     for t_start, t_end, text in timeline:
@@ -130,12 +112,10 @@ def split_to_single_words(
         if not clean:
             continue
 
-        # Marqueur PAUSE explicite
         if "[PAUSE]" in clean.upper() or clean in ("…", "..."):
             result.append((t_start, t_end, "[PAUSE]"))
             continue
 
-        # Extraire les mots (en conservant les marqueurs)
         words = clean.split()
         if not words:
             continue
@@ -146,7 +126,6 @@ def split_to_single_words(
             result.append((t_start, t_end, words[0]))
             continue
 
-        # Durée proportionnelle aux caractères (hors marqueurs)
         def char_count(w: str) -> int:
             return max(1, len(re.sub(r'\[.*?\]', '', w)))
 
@@ -161,13 +140,110 @@ def split_to_single_words(
     return result
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# NEXUS_MASTER_V38: BLOC 2B — Regroupement Stop Words
+# ══════════════════════════════════════════════════════════════════════════════
+
+def regroup_stop_with_next(
+    words: List[Tuple[float, float, str]],
+) -> List[Tuple[float, float, str]]:
+    """
+    NEXUS_MASTER_V38: Regroupe article/préposition avec le mot suivant.
+
+    Vidéo référence: "le meilleur" apparaît comme UN SEUL bloc à l'écran.
+    V37: "le" puis "meilleur" → deux écrans séparés (stop word isolé = vide visuel).
+    V38: "le meilleur" → un seul écran, timing fusionné.
+
+    Règles:
+        1. Si mot[i] ∈ STOP_WORDS ET mot[i+1] existe ET mot[i+1] ∉ STOP_WORDS:
+           → Fusionner en "{mot[i]} {mot[i+1]}" avec t_start[i], t_end[i+1]
+        2. Si mot[i] ∈ STOP_WORDS ET mot[i+1] ∈ STOP_WORDS:
+           → Ne pas fusionner (deux stop words consécutifs = trop long)
+        3. Si mot[i] est un [PAUSE], ne jamais fusionner.
+        4. Maximum 3 mots par groupe (évite les blocs trop longs).
+
+    Exemples:
+        ["le", "meilleur"]      → ["le meilleur"]
+        ["dérange", "de"]       → ["dérange de"]        (postposition)
+        ["de", "la", "marque"]  → ["de", "la marque"]   (stop+stop→skip, stop+nom→fuse)
+        ["c'est", "le", "prix"] → ["c'est", "le prix"]
+    """
+    if not words:
+        return words
+
+    result = []
+    i = 0
+
+    while i < len(words):
+        t_s, t_e, w = words[i]
+        clean = re.sub(r'\[.*?\]', '', w).strip().lower().rstrip(".,!?:;")
+
+        # Marqueur PAUSE → jamais fusionner
+        if "[PAUSE]" in w.upper() or w in ("…", "...", "—"):
+            result.append((t_s, t_e, w))
+            i += 1
+            continue
+
+        # Si c'est un stop word ET il y a un mot suivant
+        if clean in STOP_WORDS and i + 1 < len(words):
+            t_s2, t_e2, w2 = words[i + 1]
+            clean2 = re.sub(r'\[.*?\]', '', w2).strip().lower().rstrip(".,!?:;")
+
+            # Ne pas fusionner si le suivant est aussi un stop word
+            # (sinon on aurait "de la" qui n'est pas mieux que "de" seul)
+            if clean2 not in STOP_WORDS and "[PAUSE]" not in w2.upper():
+                # Fusion: "le" + "meilleur" → "le meilleur"
+                merged = f"{w} {w2}"
+                result.append((t_s, t_e2, merged))
+                i += 2
+                continue
+
+        # NEXUS_MASTER_V38: Vérifier aussi si le MOT SUIVANT est un stop word
+        # isolé en position finale (ex: "dérange de" → fusionner)
+        if i + 1 < len(words):
+            t_s2, t_e2, w2 = words[i + 1]
+            clean2 = re.sub(r'\[.*?\]', '', w2).strip().lower().rstrip(".,!?:;")
+            if clean2 in STOP_WORDS and clean not in STOP_WORDS:
+                # Le mot suivant est un stop word orphelin → l'absorber
+                # Ex: "dérange" + "de" → "dérange de"
+                # Mais seulement si c'est le dernier ou si le mot d'après n'est pas un stop
+                absorb = False
+                if i + 2 >= len(words):
+                    absorb = True  # Dernier stop word → toujours absorber
+                elif i + 2 < len(words):
+                    t_s3, t_e3, w3 = words[i + 2]
+                    clean3 = re.sub(r'\[.*?\]', '', w3).strip().lower().rstrip(".,!?:;")
+                    if clean3 not in STOP_WORDS:
+                        # Le mot d'après le stop n'est PAS un stop → c'est mieux
+                        # de laisser le stop se fusionner avec ce mot d'après
+                        absorb = False
+                    else:
+                        absorb = True
+
+                if absorb:
+                    merged = f"{w} {w2}"
+                    result.append((t_s, t_e2, merged))
+                    i += 2
+                    continue
+
+        # Pas de fusion → conserver tel quel
+        result.append((t_s, t_e, w))
+        i += 1
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 3 — Mode phrase (rétrocompatibilité)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def group_into_phrases(
     timeline:       List[Tuple[float, float, str]],
     max_chars:      int = 28,
     max_per_group:  int = 5,
 ) -> List[List[Tuple[float, float, str]]]:
     """
-    Mode phrase (rétrocompatibilité V9). NON utilisé dans le pipeline principal V23.
+    Mode phrase (rétrocompatibilité V9). NON utilisé dans le pipeline principal.
     """
     groups:  List[List] = []
     current: List       = []
