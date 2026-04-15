@@ -13,7 +13,8 @@ dependencies = [
   "moviepy>=1.0.3",
   "numpy>=1.24.0",
   "Pillow>=10.0.0",
-  "requests>=2.31.0"
+  "requests>=2.31.0",
+  "python-dotenv>=1.0.0"
 ]
 
 [build-system]

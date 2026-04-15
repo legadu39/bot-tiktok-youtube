@@ -10,6 +10,10 @@ import sys
 from enum import Enum
 from pathlib import Path
 import yaml
+from dotenv import load_dotenv
+
+# Charge les variables d'environnement depuis .env (silencieux si absent)
+load_dotenv()
 
 # --- FIX CRITIQUE WINDOWS : ENCODAGE EMOJIS ---
 # Force la console à accepter l'UTF-8 pour éviter les crashs "Logging error"
@@ -91,6 +95,9 @@ def load_config():
     if os.getenv("OPENAI_API_KEY"):
         raw_config["api_keys"]["openai"] = os.getenv("OPENAI_API_KEY")
         
+    if os.getenv("ELEVENLABS_API_KEY"):
+        raw_config["api_keys"]["elevenlabs"] = os.getenv("ELEVENLABS_API_KEY")
+
     if os.getenv("AFFILIATE_LINK"):
         raw_config["api_keys"]["affiliate_link"] = os.getenv("AFFILIATE_LINK")
 
