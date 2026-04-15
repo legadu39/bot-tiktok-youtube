@@ -145,10 +145,11 @@ def ensure_inter_fonts(target_dir: str = "./fonts") -> bool:
 
     base_url   = "https://github.com/rsms/inter/raw/master/docs/font-files/"
     fonts_needed = [
-        "Inter-ExtraBold.ttf",
-        "Inter-SemiBold.ttf",
-        "Inter-Regular.ttf",
-        "Inter-Bold.ttf",
+        "Inter-Regular.ttf",    # POLICE PRINCIPALE — vidéo référence (poids mesuré)
+        "Inter-Light.ttf",      # Variante light (accents doux)
+        "Inter-SemiBold.ttf",   # B-roll cards, CTA search pill
+        "Inter-Bold.ttf",       # Gradient accent, titres CTA
+        "Inter-ExtraBold.ttf",  # B-roll procéduraux (texte sur fond sombre)
     ]
 
     downloaded = 0
@@ -188,6 +189,11 @@ def ensure_inter_fonts(target_dir: str = "./fonts") -> bool:
 
 _FONT_CANDIDATES: Dict[str, list] = {
     "regular": [
+        # RÉFÉRENCE VIDÉO (video_referencement.mp4, mesures pixel-exact 2026-04-15):
+        # • Police : Inter Regular  — poids confirmé par analyse glyph (double-story 'a', strokes fins)
+        # • Taille à 576 px de large  : ~36 px  (bbox glyphe 27-30 px ÷ ratio ascendeur Inter 0.80)
+        # • Taille à 1080 px (cible)  : ~68 px  (36 px × 1.875, facteur de scale 1080 ÷ 576)
+        # • FS_BASE = 70 (tools/config.py) ≈ 68 px ± 3 % → acceptable, dans la marge JPEG
         "./fonts/Inter-Regular.ttf",
         "Inter-Regular.ttf",
         "C:\\Windows\\Fonts\\Inter-Regular.ttf",
@@ -200,6 +206,17 @@ _FONT_CANDIDATES: Dict[str, list] = {
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/Library/Fonts/Inter-Regular.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
+    ],
+    "light": [
+        "./fonts/Inter-Light.ttf",
+        "Inter-Light.ttf",
+        "C:\\Windows\\Fonts\\Inter-Light.ttf",
+        "./fonts/Inter-Regular.ttf",          # fallback immédiat
+        "/usr/share/fonts/truetype/inter/Inter-Light.ttf",
+        "/usr/local/share/fonts/inter/Inter-Light.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/Library/Fonts/Inter-Light.ttf",
     ],
     "semibold": [
         "./fonts/Inter-SemiBold.ttf",
@@ -425,7 +442,7 @@ def auto_size_font(
 def render_text_solid(
     text:     str,
     size:     int,
-    weight:   str   = "semibold",
+    weight:   str   = "regular",   # FIX 2026-04-15: Inter Regular (vs SemiBold) — conforme vidéo référence
     color:    tuple = TEXT_RGB,
     max_w:    int   = 920,
     inverted: bool  = False,
@@ -433,6 +450,11 @@ def render_text_solid(
     """
     MASTER_NEXUS_V36: Rendu texte solide avec compensation cap-height automatique.
     AutoSizer intégré pour responsive typography.
+
+    Poids par défaut : "regular" (Inter Regular) — VÉRITÉ DE RÉFÉRENCE 2026-04-15
+        Mesure pixel-exact sur video_referencement.mp4 : glyphes fins, regular weight,
+        double-story 'a', aucun effet (pas d'ombre, pas de glow, pas d'outline).
+        Taille cible : ~68 px à 1080 px de large  (= 36 px × 1080/576).
     """
     font, comp_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36

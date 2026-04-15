@@ -16,7 +16,7 @@
 | `pyproject.toml` | ✅ complet | — | `whisperx` absent des dépendances (non utilisé dans ce projet) |
 | `.gitignore` | 🔄 partiel | — | `config.yaml` devrait être ignoré (contient des secrets) |
 | **TOOLS/** | | | |
-| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-ExtraBold.ttf`, `fonts/Inter-SemiBold.ttf`, numpy | — (CapHeightNormalizer implémenté) |
+| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | Police principale corrigée → Inter Regular (2026-04-15) ; weight "light" ajouté dans `_FONT_CANDIDATES` |
 | `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | — (moteur V38 avec spring physics) |
 | `tools/tts_manager.py` | ✅ complet | ElevenLabs API, aiohttp, `assets/cache/tts/` | Voix hardcodées (4 profils) — OK pour l'usage actuel |
 | `tools/motion_profiles.py` | ✅ complet | `tools/physics.py`, numpy | — |
@@ -70,7 +70,7 @@
 | **ASSETS & DATA** | | | |
 | `fonts/Inter-ExtraBold.ttf` | ✅ complet | — | — |
 | `fonts/Inter-SemiBold.ttf` | ✅ complet | — | — |
-| `video_referencement.mp4` | ✅ présent | — | Analyse manuelle à faire pour valider paramètres exacts |
+| `video_referencement.mp4` | ✅ analysé | — | Paramètres extraits → section "Format vidéo de référence" dans CLAUDE.md |
 | `assets/cache/tts/` | ✅ complet | — | Cache opérationnel (~25 Mo) |
 | `assets_vault/sfx/synthetic_click.wav` | ✅ complet | — | — |
 | `healing_history.json` | ✅ complet | — | — |
