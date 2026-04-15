@@ -78,7 +78,7 @@
 | `HOLDING/pacer_state.json` | ✅ complet | — | — |
 | **ABSENTS / MANQUANTS** | | | |
 | `.env` | ❌ absent | — | Devrait contenir les clés API (sécurité) |
-| `requirements.txt` | ❌ absent | — | Seul `pyproject.toml` présent — ok si Poetry utilisé |
+| `requirements.txt` | ✅ complet | `pyproject.toml` | Généré 2026-04-15 via `pip freeze` — 167 packages, Python 3.12.10 |
 | `Makefile` | ❌ absent | — | Serait utile pour les commandes courantes |
 | `tests/` | ❌ absent | — | Aucun test unitaire ni d'intégration |
 | `STATUS.md` | ❌ absent (créé) | — | Ce fichier |
