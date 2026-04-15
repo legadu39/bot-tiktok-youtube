@@ -35,3 +35,20 @@ Thumbs.db
 desktop.ini
 
 config.yaml
+
+# ── Pipeline vidéo — outputs & buffers ────────────────────────────────────────
+BUFFER/
+REJECTED/
+OUTPUT_VIDEO/
+assets/cache/
+nexus_system.log
+
+# ── Fichiers MP4 générés (sauf vidéo de référence) ────────────────────────────
+*.mp4
+!video_referencement.mp4
+
+# ── JSONs de session / état runtime ───────────────────────────────────────────
+# (*.json est déjà couvert ligne 6 — cette section documente l'intention)
+session_*.json
+upload_state*.json
+nexus_state*.json

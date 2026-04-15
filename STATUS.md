@@ -14,7 +14,7 @@
 | `config.yaml` | ⚠️ ALERTE | — | **CLÉS API EXPOSÉES EN CLAIR** — migrer vers .env ou vault |
 | `config.example.yaml` | ✅ complet | — | — |
 | `pyproject.toml` | ✅ complet | — | `whisperx` absent des dépendances (non utilisé dans ce projet) |
-| `.gitignore` | 🔄 partiel | — | `config.yaml` devrait être ignoré (contient des secrets) |
+| `.gitignore` | ✅ complet | — | Complété 2026-04-15 : `BUFFER/`, `REJECTED/`, `OUTPUT_VIDEO/`, `assets/cache/`, `nexus_system.log`, `*.mp4` + `!video_referencement.mp4`, JSONs de session |
 | **TOOLS/** | | | |
 | `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | Police principale corrigée → Inter Regular (2026-04-15) ; weight "light" ajouté dans `_FONT_CANDIDATES` |
 | `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | — (moteur V38 avec spring physics) |
