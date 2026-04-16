@@ -770,29 +770,53 @@ def render_broll_card(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _render_tiktok_logo_vector(size: int) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V31: Logo TikTok vectoriel."""
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw   = ImageDraw.Draw(canvas)
+    """
+    FIX 2026-04-15: Logo TikTok vectoriel COMPLET — note 'd' + trait vertical soudé.
 
-    cx, cy  = size // 2, size // 2
-    stem_w  = int(size * 0.12)
-    note_r  = int(size * 0.18)
+    Structure du logo :
+        1. Tête ovale (note head) en bas-gauche
+        2. Tige gauche (stem) montant de la tête jusqu'au sommet
+        3. Barre horizontale (beam) au sommet, vers la droite
+        4. Trait vertical droit (right bar) descendant depuis l'extrémité du beam
 
-    def draw_note(draw_ref, offset_x, offset_y, color):
-        ex = cx + offset_x - note_r
-        ey = cy + offset_y + int(size * 0.15)
-        draw_ref.ellipse([ex, ey, ex + note_r*2, ey + note_r*2], fill=color)
-        sx = cx + offset_x + note_r - stem_w
-        sy = cy + offset_y - int(size * 0.30)
-        draw_ref.rectangle([sx, sy, sx + stem_w, ey + note_r], fill=color)
-        hx = sx
-        hy = sy
-        draw_ref.ellipse([hx - int(size*0.10), hy,
-                          hx + int(size*0.20), hy + int(size*0.22)], fill=color)
+    Effet glitch : couche cyan décalée -glitch_px, couche rouge +glitch_px, blanc centré.
+    Offset minimum garanti : max(3, 4% size).
+    """
+    canvas    = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw      = ImageDraw.Draw(canvas)
+    glitch_px = max(3, int(size * 0.04))
 
-    draw_note(draw, -int(size * 0.04), 0, (0, 242, 234, 200))
-    draw_note(draw,  int(size * 0.04), 0, (255, 0, 80, 200))
-    draw_note(draw,  0,                0, (255, 255, 255, 255))
+    def draw_tiktok(draw_ref, shift_x: int, color: tuple) -> None:
+        sw  = max(3, int(size * 0.11))   # épaisseur uniforme des barres
+        r   = int(size * 0.16)            # rayon tête ovale
+
+        # Ancrage horizontal (centré, légèrement décalé à gauche + glitch)
+        cx  = size // 2 + shift_x - int(size * 0.05)
+        hcy = int(size * 0.70)
+
+        # 1. Tête ovale (note head)
+        draw_ref.ellipse([cx - r, hcy - r, cx + r, hcy + r], fill=color)
+
+        # 2. Tige gauche (stem) — monte depuis la tête jusqu'au sommet
+        stem_left = cx + r - sw
+        stem_top  = int(size * 0.15)
+        draw_ref.rectangle([stem_left, stem_top,
+                             stem_left + sw, hcy + r], fill=color)
+
+        # 3. Barre horizontale (beam) au sommet de la tige
+        beam_right = stem_left + sw + int(size * 0.27)
+        draw_ref.rectangle([stem_left, stem_top,
+                             beam_right, stem_top + sw], fill=color)
+
+        # 4. Trait vertical droit (right bar) — descend depuis l'extrémité du beam
+        vbar_bot = int(size * 0.55)
+        draw_ref.rectangle([beam_right - sw, stem_top,
+                             beam_right, vbar_bot], fill=color)
+
+    # Couches glitch (cyan gauche, rouge droite) puis blanc centré
+    draw_tiktok(draw, -glitch_px, (0, 242, 234, 200))
+    draw_tiktok(draw,  glitch_px, (255, 0, 80, 200))
+    draw_tiktok(draw,  0,         (255, 255, 255, 255))
     return np.array(canvas)
 
 
@@ -803,43 +827,69 @@ def _render_search_pill(
     bg:         tuple = (255, 255, 255),
     text_color: tuple = (30, 30, 30),
 ) -> np.ndarray:
-    """ARCHITECTURE_MASTER_V31: Search bar pill."""
+    """
+    FIX 2026-04-15: Search bar pill fidèle à la référence.
+    - Fond blanc, coins arrondis
+    - Bordure gauche 3px #00F2EA (cyan), bordure droite 3px #FF0050 (rouge)
+    - Icône loupe noire à gauche
+    - "@tekiyo_" centré, Inter-Regular
+    - Mini logo TikTok (note 'd' + glitch) à droite intérieur
+    """
     radius = height // 2
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
-    draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius, fill=bg+(255,))
-    draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
-                           outline=(180, 180, 185, 255), width=2)
+    # 1. Fond blanc
+    draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius, fill=bg + (255,))
 
+    # 2. Bordure bicolore — contour complet en cyan puis demi-droite écrasée en rouge
+    border_w = 3
+    cy_col   = (0, 242, 234, 255)    # #00F2EA
+    rd_col   = (255, 0, 80, 255)     # #FF0050
+
+    b_layer  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    bd       = ImageDraw.Draw(b_layer)
+    bd.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
+                          outline=cy_col, width=border_w)
+
+    r_layer  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    rd       = ImageDraw.Draw(r_layer)
+    rd.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
+                          outline=rd_col, width=border_w)
+    mask_r   = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(mask_r).rectangle([width // 2, 0, width, height], fill=255)
+    b_layer.paste(r_layer, (0, 0), mask=mask_r)
+    canvas.alpha_composite(b_layer)
+    draw = ImageDraw.Draw(canvas)   # rafraîchir draw sur canvas mis à jour
+
+    # 3. Icône loupe à gauche
     icon_size = int(height * 0.55)
     pad       = int(height * 0.25)
-
-    lx, ly = pad, (height - icon_size) // 2
-    sr = int(icon_size * 0.38)
-    draw.ellipse([lx, ly, lx + sr*2, ly + sr*2], outline=(80, 80, 80, 255), width=2)
+    lx, ly    = pad, (height - icon_size) // 2
+    sr        = int(icon_size * 0.38)
+    draw.ellipse([lx, ly, lx + sr * 2, ly + sr * 2],
+                 outline=(80, 80, 80, 255), width=2)
     lp = int(sr * 0.70)
     draw.line([lx + sr + lp - 2, ly + sr + lp - 2,
                lx + icon_size,   ly + icon_size],
               fill=(80, 80, 80, 255), width=3)
 
+    # 4. Handle centré — Inter-Regular (FIX 2026-04-15: était semibold)
     font_size = max(20, int(height * 0.40))
-    font      = find_font("semibold", font_size)
+    font      = find_font("regular", font_size)
     tw, th    = measure_text(handle, font)
     tx        = (width - tw) // 2
     ty        = (height - th) // 2
     draw.text((tx, ty), handle, font=font, fill=text_color + (255,))
 
-    rx = width - pad - icon_size
-    ry = (height - icon_size) // 2
-    cr = icon_size // 4
-    draw.ellipse([rx + cr,             ry, rx + cr + cr*2,              ry + cr*2],
-                 fill=(0, 200, 180, 200))
-    draw.ellipse([rx + cr + int(cr*0.7), ry, rx + cr + int(cr*0.7) + cr*2, ry + cr*2],
-                 fill=(255, 0, 60, 200))
-    draw.ellipse([rx + cr + int(cr*0.35), ry + int(cr*0.15),
-                  rx + cr + int(cr*0.35) + int(cr*1.3), ry + int(cr*0.15) + int(cr*1.3)],
-                 fill=(255, 255, 255, 255))
+    # 5. Mini logo TikTok à droite (note 'd' + glitch, 45% de la hauteur)
+    mini_size = max(20, int(height * 0.45))
+    mini_arr  = _render_tiktok_logo_vector(mini_size)
+    mini_img  = Image.fromarray(mini_arr, mode="RGBA")
+    rx        = width - pad - mini_size
+    ry        = (height - mini_size) // 2
+    canvas.paste(mini_img, (rx, ry), mask=mini_img.split()[3])
+
     return np.array(canvas)
 
 

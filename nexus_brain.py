@@ -1283,6 +1283,8 @@ class NexusBrain:
             target_ratio = BROLL_TARGET_COVERAGE_RATIO,
             min_gap      = BROLL_MIN_GAP_SCENES,
         )
+        # FIX 2026-04-15: scène hook (i=0) = fond blanc pur — pas de B-Roll card overlay
+        broll_indices = [i for i in broll_indices if i != 0]
 
         broll_available = True
         try:

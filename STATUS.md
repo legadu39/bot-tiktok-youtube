@@ -4,7 +4,7 @@
 | Fichier | Statut | Dépendances | Ce qui manque |
 |---------|--------|-------------|---------------|
 | **RACINE** | | | |
-| `nexus_brain.py` | ✅ complet | `tools/graphics.py`, `tools/burner.py`, `tools/tts_manager.py`, `tools/compositor.py`, `tools/animator.py`, `tools/timeline.py`, `common.py`, `prompts/templates.py`, ElevenLabs API, FFmpeg | Rien de bloquant — V38 stable avec correctifs B-roll |
+| `nexus_brain.py` | ✅ complet | `tools/graphics.py`, `tools/burner.py`, `tools/tts_manager.py`, `tools/compositor.py`, `tools/animator.py`, `tools/timeline.py`, `common.py`, `prompts/templates.py`, ElevenLabs API, FFmpeg | FIX 2026-04-15 : scène 0 exclue des broll_indices → frame 1 fond blanc pur sans intro card noire |
 | `nexus_arms.py` | ✅ complet | `tools/tt_uploader.py`, `tools/yt_uploader.py`, `common.py`, `HOLDING/pacer_state.json` | — |
 | `nexus_daemon.py` | ✅ complet | `nexus_brain.py`, `nexus_arms.py`, `common.py`, FFmpeg (pre-flight) | — |
 | `common.py` | ✅ complet | `config.yaml`, `pyproject.toml`, FFprobe | — |
@@ -16,7 +16,7 @@
 | `pyproject.toml` | ✅ complet | — | MoviePy borné à `<2.0` (2026-04-15) — 5 fichiers utilisent API 1.x (`moviepy.editor`, `.set_fps`, `.volumex`, `.subclip`) |
 | `.gitignore` | ✅ complet | — | Complété 2026-04-15 : `BUFFER/`, `REJECTED/`, `OUTPUT_VIDEO/`, `assets/cache/`, `nexus_system.log`, `*.mp4` + `!video_referencement.mp4`, JSONs de session |
 | **TOOLS/** | | | |
-| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | Police principale corrigée → Inter Regular (2026-04-15) ; weight "light" ajouté dans `_FONT_CANDIDATES` |
+| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-Bold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | FIX 2026-04-15 : logo TikTok refait (note 'd' + trait vertical + glitch 3px) ; search pill → bordure bicolore cyan/rouge + mini logo + Inter-Regular |
 | `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | — (moteur V38 avec spring physics) |
 | `tools/tts_manager.py` | ✅ complet | ElevenLabs API, aiohttp, `assets/cache/tts/` | Voix hardcodées (4 profils) — OK pour l'usage actuel |
 | `tools/motion_profiles.py` | ✅ complet | `tools/physics.py`, numpy | — |
