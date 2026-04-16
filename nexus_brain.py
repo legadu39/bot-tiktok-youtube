@@ -144,6 +144,60 @@ def _is_ghost_text(scene_text: str) -> bool:
     return any(ghost in t_clean for ghost in _GHOST_TEXT_BLACKLIST)
 
 
+# FIX 2026-04-15: Mots déclencheurs d'inversion fond noir (#000000 + étoiles ★ violettes)
+# Correspond aux mots émotionnels forts observés dans la vidéo de référence.
+_DARK_TRIGGER_WORDS = frozenset([
+    "secret", "vérité", "jamais", "interdit", "caché", "révèle", "révèle",
+    "enfin", "attention", "stop", "erreur", "toujours", "tous", "seul",
+    "argent", "riche", "capital", "clé", "stratégie", "méthode",
+    "traders", "funded", "découvre", "maintenant", "puissant",
+    "réel", "vrai", "faux", "danger", "piège", "alerte", "choc",
+])
+
+
+def _inject_dark_tags(scenes: List[Dict], max_tags: int = 2) -> List[Dict]:
+    """
+    FIX 2026-04-15: Injecte le tag [DARK] sur max_tags mots forts par script.
+
+    Les mots tagués [DARK] déclenchent dans burn_subtitles() une inversion
+    fond noir (#000000) + étoiles ★ violettes (#7B2FD9) autour du texte.
+    Le tag est strippé avant affichage (le mot s'affiche normalement en blanc).
+
+    Règles :
+        - Maximum max_tags=2 occurrences par vidéo (fréquence référence : 2-3)
+        - Un seul tag [DARK] par scène (évite double-inversion sur une phrase)
+        - Ne pas taguer si [DARK] déjà présent dans le script (idempotent)
+        - Appliquer dès la scène 1 (pas la scène 0 = hook)
+    """
+    already_tagged = any("[DARK]" in s.get("text", "").upper()
+                         for s in scenes)
+    if already_tagged:
+        return scenes
+
+    tags_added = 0
+    result     = []
+    for idx, scene in enumerate(scenes):
+        if tags_added >= max_tags or idx == 0:
+            result.append(scene)
+            continue
+        text        = scene.get("text", "")
+        words_split = text.split()
+        new_words   = []
+        scene_tagged = False
+        for w in words_split:
+            clean = re.sub(r'[^\w]', '', w.lower())
+            if (not scene_tagged
+                    and tags_added < max_tags
+                    and clean in _DARK_TRIGGER_WORDS):
+                new_words.append(f"[DARK]{w}")
+                tags_added  += 1
+                scene_tagged = True
+            else:
+                new_words.append(w)
+        result.append({**scene, "text": " ".join(new_words)})
+    return result
+
+
 def _sanitize_visual_prompt(raw_prompt: str) -> str:
     if not raw_prompt:
         return "cinematic trading abstract"
@@ -1834,6 +1888,9 @@ class NexusBrain:
         if not script_data:
             topic       = await self._step_0_brainstorm_topic()
             script_data = await self._step_1_ideation(topic, "INSIDER")
+            # FIX 2026-04-15: injection tags [DARK] pour inversions fond noir
+            if script_data and script_data.get("scenes"):
+                script_data["scenes"] = _inject_dark_tags(script_data["scenes"])
 
         if not script_data or not script_data.get("scenes"):
             jlog("error", msg="DA Mode: Impossible de récupérer un vrai script.")
@@ -1902,6 +1959,9 @@ class NexusBrain:
             try:
                 topic  = await self._step_0_brainstorm_topic()
                 script = await self._step_1_ideation(topic, "INSIDER")
+                # FIX 2026-04-15: injection tags [DARK] pour inversions fond noir
+                if script and script.get("scenes"):
+                    script["scenes"] = _inject_dark_tags(script["scenes"])
 
                 if (script
                         and "scenes" in script

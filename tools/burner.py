@@ -128,29 +128,45 @@ def _zoom_frame_fast(frame: np.ndarray, zoom_scale: float) -> np.ndarray:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SparkleEngine:
-    """Moteur de particules violettes (inversion #1 uniquement)."""
+    """
+    FIX 2026-04-15: Étoiles ★ violettes statiques — conforme vidéo référence.
 
-    PALETTE = [
-        SPARKLE_COLOR_PRIMARY,
-        SPARKLE_COLOR_SECONDARY,
-        SPARKLE_COLOR_ACCENT,
-        (30, 5, 70),
-        (120, 30, 200),
-    ]
+    Ancienne implémentation : cercles orbitants via cos/sin(t) → pas fidèle.
+    Nouvelle implémentation :
+        - 3 étoiles ★ 5 branches à positions FIXES seedées (reproductibles)
+        - Positions : centre texte ± 80px (hors zone texte principale)
+        - Couleur : #7B2FD9 = (123, 47, 217) — violet référence
+        - Légère pulsation de rayon (±15%) pour donner vie sans mouvement orbital
+        - Glow semi-transparent autour de chaque étoile
+    """
+
+    STAR_COLOR  = (123, 47, 217)    # #7B2FD9 — violet référence
+    STAR_RADIUS = 7                  # rayon externe → ~14px diamètre
+    STAR_OFFSET = 80                 # offset max ±80px depuis le centre texte
 
     def __init__(self, vid_w: int, vid_h: int, n_particles: int = SPARKLE_COUNT):
-        self.vid_w    = vid_w
-        self.vid_h    = vid_h
-        self.n        = n_particles
-        self.orbit_rx = vid_w * SPARKLE_ORBIT_RX_RATIO
-        self.orbit_ry = vid_h * SPARKLE_ORBIT_RY_RATIO
+        self.vid_w = vid_w
+        self.vid_h = vid_h
+        self.n     = min(n_particles, 4)   # max 4 étoiles
 
-        base_phases = [2.0 * math.pi * i / n_particles for i in range(n_particles)]
-        self.phases = [p + random.uniform(-0.3, 0.3) for p in base_phases]
-        self.speeds = [SPARKLE_SPEED_BASE + random.uniform(-0.4, 0.4) for _ in range(n_particles)]
-        self.radii  = [SPARKLE_RADIUS_PX + random.randint(-2, 2) for _ in range(n_particles)]
-        self.alphas = [SPARKLE_ALPHA + random.uniform(-0.15, 0.15) for _ in range(n_particles)]
-        self.colors = [self.PALETTE[i % len(self.PALETTE)] for i in range(n_particles)]
+        # Positions statiques seedées (déterministes, reproductibles)
+        rng = random.Random(vid_w * 31 + vid_h * 17)
+        self.offsets = [
+            (rng.randint(-self.STAR_OFFSET, self.STAR_OFFSET),
+             rng.randint(-self.STAR_OFFSET, self.STAR_OFFSET))
+            for _ in range(self.n)
+        ]
+
+    @staticmethod
+    def _draw_star(draw, cx: float, cy: float, r: int, color: tuple) -> None:
+        """Dessine une étoile à 5 branches (polygone, ~14px à r=7)."""
+        pts = []
+        for i in range(10):
+            angle = math.pi * i / 5 - math.pi / 2
+            r_use = r if i % 2 == 0 else max(1, int(r * 0.40))
+            pts.append((cx + r_use * math.cos(angle),
+                        cy + r_use * math.sin(angle)))
+        draw.polygon(pts, fill=color)
 
     def render_onto(
         self,
@@ -160,26 +176,26 @@ class SparkleEngine:
         center_y: int,
     ) -> np.ndarray:
         from PIL import Image as PilImage, ImageDraw
-        h, w = frame.shape[:2]
-        img  = PilImage.fromarray(frame).convert("RGBA")
-        over = PilImage.new("RGBA", (w, h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(over)
+        h, w  = frame.shape[:2]
+        img   = PilImage.fromarray(frame).convert("RGBA")
+        over  = PilImage.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw  = ImageDraw.Draw(over)
 
-        for i in range(self.n):
-            angle = self.phases[i] + self.speeds[i] * t
-            px    = int(center_x + self.orbit_rx * math.cos(angle))
-            py    = int(center_y + self.orbit_ry * math.sin(angle))
-            r     = self.radii[i]
-            color = self.colors[i]
+        # Légère pulsation de rayon (±15%) pour animation subtile
+        pulse = 1.0 + 0.15 * math.sin(t * 4.0)
+        r     = max(4, int(self.STAR_RADIUS * pulse))
+        r_glow = r + 4
 
-            pulse = 1.0 + 0.3 * math.sin(self.speeds[i] * 3.0 * t)
-            alpha = int(self.alphas[i] * pulse * 255)
-            alpha = max(0, min(255, alpha))
-
-            for glow_r, glow_frac in [(r + 5, 0.15), (r + 3, 0.30), (r + 1, 0.60)]:
-                ga = int(alpha * glow_frac)
-                draw.ellipse([px-glow_r, py-glow_r, px+glow_r, py+glow_r], fill=(*color, ga))
-            draw.ellipse([px-r, py-r, px+r, py+r], fill=(*color, alpha))
+        for dx, dy in self.offsets:
+            px = center_x + dx
+            py = center_y + dy
+            if 0 < px < w and 0 < py < h:
+                # Glow semi-transparent (halo violet doux)
+                self._draw_star(draw, px, py, r_glow,
+                                (*self.STAR_COLOR, 70))
+                # Corps étoile (plein, ~230/255 d'opacité)
+                self._draw_star(draw, px, py, r,
+                                (*self.STAR_COLOR, 230))
 
         result = PilImage.alpha_composite(img, over)
         return np.array(result.convert("RGB"))
@@ -378,20 +394,23 @@ class SubtitleBurner:
         inv_intervals: List[Tuple[float, float]],
     ) -> Tuple[int, int, int]:
         """
-        NEXUS_MASTER_V38: Détermine la couleur BG par index d'inversion.
-        Inversion #0 (première) → noir pur.
-        Inversion #1+ (dernière) → navy (CTA).
+        FIX 2026-04-15: Toutes les inversions sauf la DERNIÈRE (CTA) → fond noir pur.
+        Dernière inversion → navy (#0D0E1A, CTA card).
+
+        Ancienne logique : seule l'inversion #0 était noire → les inversions [DARK]
+        supplémentaires (>0) recevaient un fond navy au lieu du noir.
         """
-        if len(inv_intervals) < 2:
+        n = len(inv_intervals)
+        if n == 0:
             return INVERSION_BG_COLOR_1
 
-        # Trouver dans quel intervalle on est
         for i, (t0, t1) in enumerate(inv_intervals):
             if t0 <= t < t1:
-                if i == 0:
-                    return INVERSION_BG_COLOR_1
-                else:
+                # Dernière inversion = CTA (fond navy)
+                if i == n - 1 and n >= 2:
                     return INVERSION_BG_COLOR_2
+                # Toutes les autres = fond noir pur
+                return INVERSION_BG_COLOR_1
 
         return INVERSION_BG_COLOR_1
 
@@ -400,12 +419,16 @@ class SubtitleBurner:
         t: float,
         inv_intervals: List[Tuple[float, float]],
     ) -> bool:
-        if not SPARKLE_ENABLED:
+        """
+        FIX 2026-04-15: Étoiles sur TOUTES les inversions noires (toutes sauf la dernière = CTA).
+        Ancienne logique : uniquement SPARKLE_ACTIVE_INVERSION=0 → étoiles absentes sur [DARK] ajoutés.
+        """
+        if not SPARKLE_ENABLED or not inv_intervals:
             return False
-        active_idx = SPARKLE_ACTIVE_INVERSION
-        if active_idx < len(inv_intervals):
-            t0, t1 = inv_intervals[active_idx]
-            return t0 <= t < t1
+        # Toutes les inversions sauf la dernière (CTA) ont des étoiles
+        for t0, t1 in inv_intervals[:-1]:
+            if t0 <= t < t1:
+                return True
         return False
 
     def _is_cta_window(
@@ -598,9 +621,28 @@ class SubtitleBurner:
         # ── NEXUS_MASTER_V38: FIX #1 — Inversions proportionnelles ───────
         inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
 
+        # FIX 2026-04-15: Détecter les mots tagués [DARK] dans la timeline brute
+        # et les injecter comme inversions noires supplémentaires (avant le CTA).
+        dark_word_intervals = [
+            (round(ts, 3), round(te, 3))
+            for ts, te, w in words
+            if "[DARK]" in w.upper()
+        ]
+        if dark_word_intervals:
+            # Insérer avant la dernière inversion (CTA), sans chevaucher les existantes
+            cta_inv = inv_intervals[-1] if inv_intervals else None
+            merged  = list(inv_intervals[:-1]) if inv_intervals else []
+            for dt0, dt1 in dark_word_intervals:
+                overlap = any(abs(dt0 - t0) < 0.8 for t0, _ in merged)
+                if not overlap and (cta_inv is None or dt1 < cta_inv[0] - 0.5):
+                    merged.append((dt0, dt1))
+            merged.sort()
+            if cta_inv:
+                merged.append(cta_inv)
+            inv_intervals = merged
+            print(f"  🌑 [DARK] tags: {len(dark_word_intervals)} interval(s) injecté(s)")
+
         # ── Étape 5: CTA Card dans TimelineEngine (z=15) ─────────────────
-        # NEXUS_MASTER_V38: Utilise la dernière inversion dynamique au lieu
-        # de INVERSION_TIMESTAMPS hardcodé
         if len(inv_intervals) >= 2:
             cta_t0, cta_t1 = inv_intervals[-1]  # Dernière inversion = CTA
             if cta_start is not None:
