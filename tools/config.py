@@ -35,8 +35,8 @@ TEXT_DIM_RGB  = (150, 150, 150)
 ACCENT_RGB    = (0,   208, 132)
 MUTED_RGB     = (220,  40,  35)
 
-ACCENT_GRADIENT_LEFT  = (105, 228, 220)
-ACCENT_GRADIENT_RIGHT = (208, 122, 148)
+ACCENT_GRADIENT_LEFT  = (155,  89, 182)   # violet #9B59B6 — référence vidéo
+ACCENT_GRADIENT_RIGHT = (244, 196,  48)   # or     #F4C430 — référence vidéo
 
 
 # ── Couleurs thème INVERSÉ (fond sombre) ─────────────────────────────────────
@@ -46,8 +46,8 @@ TEXT_DIM_INV   = (155, 155, 155)
 ACCENT_RGB_INV = (248,  18,  90)
 MUTED_RGB_INV  = (255,  70,  60)
 
-ACCENT_GRADIENT_LEFT_INV  = (45,  175, 168)
-ACCENT_GRADIENT_RIGHT_INV = (190,  85, 115)
+ACCENT_GRADIENT_LEFT_INV  = (190, 120, 225)   # violet clair pour fond noir
+ACCENT_GRADIENT_RIGHT_INV = (255, 220,  80)   # or lumineux pour fond noir
 
 
 # ── Couleurs de fond inversion ────────────────────────────────────────────────
