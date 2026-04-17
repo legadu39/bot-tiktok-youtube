@@ -1757,11 +1757,8 @@ class NexusBrain:
                 subtitle_timeline.append((cursor, cursor + d, scenes[i].get("text", "")))
                 cursor += d
 
-            # ── Collecte intervalles [DARK] depuis la timeline SCÈNE ─────
-            # CRITIQUE : doit être fait ICI, avant que Whisper ou l'humaniseur
-            # ne remplacent subtitle_timeline par une version sans tags.
-            # _build_synthetic_word_timeline_humanized() stripe [DARK] via
-            # re.sub(r'\[.*?\]', ''), rendant la détection word-level inopérante.
+            # ── Collecte intervalles [DARK], [REPEATER], [ICON] depuis timeline SCÈNE ──
+            # CRITIQUE : doit être fait ICI, avant que l'humaniseur stripe les tags.
             dark_scene_intervals: List[Tuple[float, float]] = [
                 (round(ts, 3), round(te, 3))
                 for ts, te, text in subtitle_timeline
@@ -1772,6 +1769,29 @@ class NexusBrain:
                     f"[DARK] {len(dark_scene_intervals)} scène(s) taguée(s) "
                     f"→ fond noir activé aux instants : {dark_scene_intervals}"
                 ))
+
+            _re_rep  = re.compile(r'\[REPEATER\s*:\s*([^\]]+)\]', re.IGNORECASE)
+            _re_icon = re.compile(r'\[ICON\s*:\s*([^\]]+)\]',     re.IGNORECASE)
+
+            repeater_schedule: List[Tuple[float, float, str, str]] = []
+            icon_schedule:     List[Tuple[float, float, str]]      = []
+
+            for ts, te, text in subtitle_timeline:
+                m_rep = _re_rep.search(text)
+                if m_rep:
+                    tile = m_rep.group(1).strip()
+                    word = re.sub(r'\[.*?\]', '', text).strip() or tile
+                    repeater_schedule.append((round(ts, 3), round(te, 3), tile, word))
+
+                m_icon = _re_icon.search(text)
+                if m_icon:
+                    icon_name = m_icon.group(1).strip().lower()
+                    icon_schedule.append((round(ts, 3), round(te, 3), icon_name))
+
+            if repeater_schedule:
+                jlog("info", msg=f"[REPEATER] {len(repeater_schedule)} scène(s) détectée(s)")
+            if icon_schedule:
+                jlog("info", msg=f"[ICON] {len(icon_schedule)} scène(s) détectée(s)")
 
             is_tts_test_mode = getattr(self.tts, "test_mode", False)
 
@@ -1838,6 +1858,8 @@ class NexusBrain:
                 timeline            = subtitle_timeline,
                 broll_schedule      = broll_schedule,
                 dark_scene_intervals= dark_scene_intervals,
+                repeater_schedule   = repeater_schedule,
+                icon_schedule       = icon_schedule,
             )
 
             # ── Export final ──────────────────────────────────────────────

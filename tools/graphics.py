@@ -943,3 +943,146 @@ def render_cta_card(
     canvas.paste(pill_img, (pill_x, pill_y), mask=pill_img.split()[3])
 
     return np.array(canvas)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 7 — REPEATER scene (fond gris + grille tile + mot blanc centré)
+# Référence vidéo frame t=28s : fond #838383, emoji 🏢 tilé, "doublé" en blanc.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_REPEATER_BG = (131, 131, 131)   # #838383
+
+def render_repeater_scene(
+    word:     str,
+    tile:     str = "■",
+    canvas_w: int = 1080,
+    canvas_h: int = 1920,
+) -> np.ndarray:
+    """
+    Génère un frame plein écran REPEATER :
+        - Fond gris #838383
+        - Caractère/emoji tilé en grille dense (couleur légèrement plus sombre)
+        - Mot principal en blanc ExtraBold centré à 50% V
+
+    `tile` peut être un emoji (🏢) ou un caractère quelconque.
+    Sur Windows, Segoe UI Emoji est tenté en priorité pour le tileage.
+    Fallback garanti sur caractère ASCII si la font emoji est indisponible.
+    """
+    bg = Image.new("RGB", (canvas_w, canvas_h), _REPEATER_BG)
+    draw = ImageDraw.Draw(bg)
+
+    # ── Font emoji pour le tileage ────────────────────────────────────────
+    tile_size = max(48, int(canvas_w * 0.055))
+    tile_font = None
+    for fp in [
+        "C:/Windows/Fonts/seguiemj.ttf",
+        "C:/Windows/Fonts/seguisym.ttf",
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    ]:
+        try:
+            if os.path.exists(fp):
+                tile_font = ImageFont.truetype(fp, tile_size)
+                break
+        except Exception:
+            continue
+    if tile_font is None:
+        tile_font = find_font("regular", tile_size)
+        tile = "■"   # fallback ASCII si pas de font emoji
+
+    # ── Grille dense ──────────────────────────────────────────────────────
+    tile_color = (100, 100, 100)   # légèrement plus sombre que le fond
+    spacing    = int(tile_size * 1.25)
+    for row_y in range(-spacing, canvas_h + spacing, spacing):
+        for col_x in range(-spacing, canvas_w + spacing, spacing):
+            try:
+                draw.text((col_x, row_y), tile, font=tile_font, fill=tile_color)
+            except Exception:
+                draw.text((col_x, row_y), "■", font=tile_font, fill=tile_color)
+
+    # ── Mot principal en blanc ExtraBold centré ───────────────────────────
+    clean = re.sub(r'\[.*?\]', '', word).strip() or word.strip()
+    word_font, _, tw, th = auto_size_font(clean, "extrabold", 90, canvas_w - 80)
+    tx = (canvas_w - tw) // 2
+    ty = int(canvas_h * 0.499) - th // 2
+    # Ombre légère
+    draw.text((tx + 3, ty + 4), clean, font=word_font, fill=(80, 80, 80))
+    # Texte blanc
+    draw.text((tx, ty), clean, font=word_font, fill=(255, 255, 255))
+
+    return np.array(bg)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 8 — ICON scene (fond blanc + icône/emoji centré)
+# Référence vidéo frame t=18s : œil noir plat centré sur fond blanc.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ICON_MAP = {
+    "oeil": "👁",  "eye": "👁",    "regard": "👁",
+    "feu":  "🔥",  "fire": "🔥",
+    "argent": "💰","money": "💰",
+    "fusée": "🚀", "rocket": "🚀",
+    "cercle": "●", "circle": "●",
+    "check": "✓",  "valide": "✓",
+    "alerte": "⚠", "warning": "⚠",
+    "cadenas": "🔒","lock": "🔒",
+    "graphique": "📈","chart": "📈",
+    "diamant": "💎","diamond": "💎",
+    "etoile": "★", "star": "★",
+    "fleche": "→", "arrow": "→",
+}
+
+
+def render_icon_scene(
+    icon_param: str,
+    canvas_w:   int = 1080,
+    canvas_h:   int = 1920,
+) -> np.ndarray:
+    """
+    Génère un frame plein écran ICON :
+        - Fond blanc pur
+        - Icône/emoji noir centré à 50% V, ~15% de la largeur (≈162px@1080)
+
+    `icon_param` est le nom normalisé (ex: "oeil", "feu") ou un emoji direct.
+    Si le rendu emoji échoue, dessine un disque noir de fallback.
+    """
+    bg   = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(bg)
+
+    # Résoudre le caractère
+    icon_char = _ICON_MAP.get(icon_param.lower().strip(), icon_param[:4])
+
+    icon_size = max(80, int(canvas_w * 0.15))   # ~162px à 1080px
+    icon_font = None
+    for fp in [
+        "C:/Windows/Fonts/seguiemj.ttf",
+        "C:/Windows/Fonts/seguisym.ttf",
+        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    ]:
+        try:
+            if os.path.exists(fp):
+                icon_font = ImageFont.truetype(fp, icon_size)
+                break
+        except Exception:
+            continue
+
+    cx = canvas_w // 2
+    cy = int(canvas_h * 0.499)
+
+    if icon_font is not None:
+        try:
+            bbox = draw.textbbox((0, 0), icon_char, font=icon_font)
+            tw   = bbox[2] - bbox[0]
+            th   = bbox[3] - bbox[1]
+            draw.text((cx - tw // 2, cy - th // 2), icon_char,
+                      font=icon_font, fill=(10, 10, 10, 255))
+        except Exception:
+            icon_font = None   # fallback disque
+
+    if icon_font is None:
+        r = icon_size // 2
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(10, 10, 10, 255))
+
+    return np.array(bg.convert("RGB"))

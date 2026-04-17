@@ -64,6 +64,7 @@ from .text_engine import (
 from .graphics import (
     render_text_solid, render_text_gradient, find_font, measure_text,
     render_broll_card, render_cta_card,
+    render_repeater_scene, render_icon_scene,
 )
 from .timeline import TimelineObject, TimelineEngine
 
@@ -547,6 +548,8 @@ class SubtitleBurner:
         broll_schedule:       List[Tuple[float, float, str]] = None,
         cta_start:            float = None,
         dark_scene_intervals: List[Tuple[float, float]] = None,
+        repeater_schedule:    List[Tuple[float, float, str, str]] = None,
+        icon_schedule:        List[Tuple[float, float, str]] = None,
     ):
         """
         NEXUS_MASTER_V38: Pipeline burn avec:
@@ -662,7 +665,29 @@ class SubtitleBurner:
             )
             print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement)")
 
-        # ── Étape 8: make_frame ───────────────────────────────────────────
+        # ── Étape 8: Pré-rendu REPEATER et ICON (frames statiques par scène) ──
+        repeater_schedule = repeater_schedule or []
+        icon_schedule     = icon_schedule     or []
+
+        _repeater_frames: dict = {}   # t_start → (rgb_array, t_end)
+        for t0, t1, tile, word in repeater_schedule:
+            try:
+                arr = render_repeater_scene(word, tile, vid_w, vid_h)
+                _repeater_frames[t0] = (arr, t1)
+                print(f"  🔁 REPEATER [{t0:.2f},{t1:.2f}s] tile='{tile}' word='{word}'")
+            except Exception as e:
+                print(f"⚠️  REPEATER render failed: {e}")
+
+        _icon_frames: dict = {}       # t_start → (rgb_array, t_end)
+        for t0, t1, icon_name in icon_schedule:
+            try:
+                arr = render_icon_scene(icon_name, vid_w, vid_h)
+                _icon_frames[t0] = (arr, t1)
+                print(f"  🖼️  ICON [{t0:.2f},{t1:.2f}s] icon='{icon_name}'")
+            except Exception as e:
+                print(f"⚠️  ICON render failed: {e}")
+
+        # ── Étape 9: make_frame ───────────────────────────────────────────
         # NEXUS_MASTER_V38: Capture inv_intervals in closure for dynamic use
         _inv_intervals  = inv_intervals
         # Intervalles B-Roll : texte kinétique masqué pendant ces fenêtres
@@ -679,9 +704,23 @@ class SubtitleBurner:
                 base = (last_valid_frame if last_valid_frame is not None
                         else np.full((vid_h, vid_w, 3), 255, dtype=np.uint8))
 
+            # Détection frame spéciale REPEATER / ICON (priorité sur inversion)
+            _special_frame = None
+            for t0, (arr, t1) in _repeater_frames.items():
+                if t0 <= t < t1:
+                    _special_frame = arr
+                    break
+            if _special_frame is None:
+                for t0, (arr, t1) in _icon_frames.items():
+                    if t0 <= t < t1:
+                        _special_frame = arr
+                        break
+
             is_inv = any(t0 <= t < t1 for t0, t1 in _inv_intervals)
 
-            if is_inv:
+            if _special_frame is not None:
+                base = _special_frame.copy()
+            elif is_inv:
                 # NEXUS_MASTER_V38: bg_color dépend de l'index d'inversion
                 bg_color = self._get_inversion_bg_color(t, _inv_intervals)
                 base     = np.full_like(base, 0)
@@ -692,9 +731,12 @@ class SubtitleBurner:
             # ÉTAPE A — B-Roll + CTA cards
             frame = engine.render_frame(t, base)
 
-            # ÉTAPE B — Texte masqué pendant CTA et B-Roll
+            # ÉTAPE B — Texte masqué pendant CTA, B-Roll, REPEATER et ICON
             _in_broll = any(t0 <= t < t1 for t0, t1 in _broll_intervals)
-            if not self._is_cta_window(t, _inv_intervals) and not _in_broll:
+            _suppress = (self._is_cta_window(t, _inv_intervals)
+                         or _in_broll
+                         or _special_frame is not None)
+            if not _suppress:
                 frame = compose_frame(
                     t, all_word_clips, vid_w, vid_h,
                     base_frame=frame, inverted=is_inv,
