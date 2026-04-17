@@ -664,7 +664,9 @@ class SubtitleBurner:
 
         # ── Étape 8: make_frame ───────────────────────────────────────────
         # NEXUS_MASTER_V38: Capture inv_intervals in closure for dynamic use
-        _inv_intervals = inv_intervals
+        _inv_intervals  = inv_intervals
+        # Intervalles B-Roll : texte kinétique masqué pendant ces fenêtres
+        _broll_intervals = [(t_bs, t_be) for t_bs, t_be, _ in broll_schedule]
         last_valid_frame = None
 
         def make_frame(t: float) -> np.ndarray:
@@ -690,8 +692,9 @@ class SubtitleBurner:
             # ÉTAPE A — B-Roll + CTA cards
             frame = engine.render_frame(t, base)
 
-            # ÉTAPE B — Texte (MASQUÉ pendant CTA window)
-            if not self._is_cta_window(t, _inv_intervals):
+            # ÉTAPE B — Texte masqué pendant CTA et B-Roll
+            _in_broll = any(t0 <= t < t1 for t0, t1 in _broll_intervals)
+            if not self._is_cta_window(t, _inv_intervals) and not _in_broll:
                 frame = compose_frame(
                     t, all_word_clips, vid_w, vid_h,
                     base_frame=frame, inverted=is_inv,
