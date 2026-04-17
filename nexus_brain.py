@@ -48,16 +48,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
-try:
-    from moviepy.config import change_settings
-    magick_path = shutil.which("magick") or shutil.which("convert")
-    if magick_path:
-        change_settings({"IMAGEMAGICK_BINARY": magick_path})
-    elif os.path.exists(r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"):
-        change_settings({"IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"})
-except Exception:
-    pass
-
 import aiohttp
 try:
     from moviepy.editor import (
@@ -72,6 +62,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from common import jlog, CONFIG, ensure_directories, resolve_path
 from prompts.templates import wrap_v3_prompt, get_manual_ingestion_prompt, get_brainstorm_prompt
+
+# Configuration ImageMagick — chemin lu depuis config.yaml (tools.imagemagick_binary)
+# puis détection automatique dans PATH, sinon ignoré silencieusement.
+try:
+    from moviepy.config import change_settings as _moviepy_change_settings
+    _magick_path = shutil.which("magick") or shutil.which("convert")
+    if not _magick_path:
+        _magick_path = CONFIG.get("tools", {}).get("imagemagick_binary")
+    if _magick_path and os.path.exists(_magick_path):
+        _moviepy_change_settings({"IMAGEMAGICK_BINARY": _magick_path})
+except Exception:
+    pass
 from tools.asset_vault import AssetVault
 from tools.tts_manager import OpenAITTS
 from tools.scene_animator import SceneAnimator
@@ -609,17 +611,22 @@ class NexusBrain:
     MIN_WHISPER_WORDS_PER_SECOND = 0.3
 
     def __init__(self):
-        self.root_dir   = resolve_path("workspace")
-        self.hot_root   = resolve_path("hot_folder")
-        self.buffer_dir = resolve_path("BUFFER")
-        self.base_path  = os.path.dirname(os.path.abspath(__file__))
+        self.root_dir       = resolve_path("workspace")
+        self.hot_root       = resolve_path("hot_folder")
+        self.buffer_dir     = resolve_path("BUFFER")
+        # FIX C2+DA2 2026-04-16: répertoire dédié à la communication CLI→Brain.
+        # _clean_buffer() nettoie uniquement ce sous-répertoire, évitant d'effacer
+        # les tâches d'upload déposées par _deliver_package() dans BUFFER/.
+        self.cli_buffer_dir = resolve_path("BUFFER/cli")
+        self.base_path      = os.path.dirname(os.path.abspath(__file__))
 
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.hot_root.mkdir(parents=True, exist_ok=True)
         self.buffer_dir.mkdir(parents=True, exist_ok=True)
+        self.cli_buffer_dir.mkdir(parents=True, exist_ok=True)
 
         if not shutil.which("ffmpeg"):
-            ffmpeg_bin_path = r"C:\ffmpeg\bin"
+            ffmpeg_bin_path = CONFIG.get("tools", {}).get("ffmpeg_bin_path", r"C:\ffmpeg\bin")
             if os.path.exists(ffmpeg_bin_path):
                 if ffmpeg_bin_path not in os.environ["PATH"]:
                     os.environ["PATH"] += os.pathsep + ffmpeg_bin_path
@@ -719,6 +726,8 @@ class NexusBrain:
             "--prompt", prompt,
             "--user-id", "admin",
             "--profile-base", CONFIG.get("SENTINEL_PROFILE", r"C:/Nexus_Data"),
+            # FIX C2+DA2 2026-04-16: redirige la sortie CLI vers BUFFER/cli/
+            "--cli-buffer-dir", str(self.cli_buffer_dir),
         ]
 
         healing_state = self._read_healing_history()
@@ -791,16 +800,19 @@ class NexusBrain:
         return None
 
     def _clean_buffer(self):
+        # FIX C2+DA2 2026-04-16: ne nettoie que BUFFER/cli/, jamais BUFFER/ racine
+        # qui contient les tâches d'upload en attente pour nexus_arms.py.
         try:
-            for f in self.buffer_dir.glob("*.json"):
+            for f in self.cli_buffer_dir.glob("*.json"):
                 try: os.remove(f)
                 except: pass
         except Exception:
             pass
 
     def _retrieve_latest_buffer_content(self, start_time: float = 0.0) -> Optional[str]:
+        # FIX C2+DA2 2026-04-16: lecture dans BUFFER/cli/ (sortie du CLI headless)
         try:
-            files = list(self.buffer_dir.glob("*.json"))
+            files = list(self.cli_buffer_dir.glob("*.json"))
             if not files:
                 return None
             valid_files = [f for f in files if os.path.getmtime(f) >= start_time - 1.0]
@@ -1745,6 +1757,22 @@ class NexusBrain:
                 subtitle_timeline.append((cursor, cursor + d, scenes[i].get("text", "")))
                 cursor += d
 
+            # ── Collecte intervalles [DARK] depuis la timeline SCÈNE ─────
+            # CRITIQUE : doit être fait ICI, avant que Whisper ou l'humaniseur
+            # ne remplacent subtitle_timeline par une version sans tags.
+            # _build_synthetic_word_timeline_humanized() stripe [DARK] via
+            # re.sub(r'\[.*?\]', ''), rendant la détection word-level inopérante.
+            dark_scene_intervals: List[Tuple[float, float]] = [
+                (round(ts, 3), round(te, 3))
+                for ts, te, text in subtitle_timeline
+                if "[DARK]" in text.upper()
+            ]
+            if dark_scene_intervals:
+                jlog("info", msg=(
+                    f"[DARK] {len(dark_scene_intervals)} scène(s) taguée(s) "
+                    f"→ fond noir activé aux instants : {dark_scene_intervals}"
+                ))
+
             is_tts_test_mode = getattr(self.tts, "test_mode", False)
 
             if not is_tts_test_mode and self.subtitle_burner.available:
@@ -1806,9 +1834,10 @@ class NexusBrain:
 
             # ── SubtitleBurner ────────────────────────────────────────────
             final_clip = self.subtitle_burner.burn_subtitles(
-                video_clip     = video_track,
-                timeline       = subtitle_timeline,
-                broll_schedule = broll_schedule,
+                video_clip          = video_track,
+                timeline            = subtitle_timeline,
+                broll_schedule      = broll_schedule,
+                dark_scene_intervals= dark_scene_intervals,
             )
 
             # ── Export final ──────────────────────────────────────────────
@@ -1847,6 +1876,17 @@ class NexusBrain:
         except Exception as e:
             if not safe_mode:
                 jlog("error", msg="HQ render failed → Safe Mode activé.", error=str(e))
+                # FIX C5 2026-04-16: libération des ressources MoviePy avant récursion
+                # pour éviter les fuites de file handles si le rendu HQ a échoué à mi-chemin.
+                if "audio_clip" in locals():
+                    try: audio_clip.close()
+                    except: pass
+                if base_clip is not None:
+                    try: base_clip.close()
+                    except: pass
+                for c in clips:
+                    try: c.close()
+                    except: pass
                 return await self._step_4_assembly(
                     script_data, visual_assets, broll_indices, audio_path, safe_mode=True,
                 )
@@ -1861,22 +1901,73 @@ class NexusBrain:
     # ─────────────────────────────────────────────────────────────────────
 
     async def _deliver_package(self, video_path: str, script_data: Dict):
+        # FIX C1+DA1 2026-04-16: déplace la vidéo dans BUFFER/ et écrit le JSON
+        # au format {"meta": {"video_path": ...}, "content": {...}} attendu par
+        # nexus_arms.py:process_buffer_queue().
         meta  = script_data.get("meta", {})
         title = meta.get("title", "Video Finance")
         tags  = meta.get("tags", [])
         for t in ["trading", "propfirm", "finance", "business"]:
             if t not in tags: tags.append(t)
 
-        meta_path = video_path.replace(".mp4", ".json")
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "title":       title,
-                "description": meta.get("description", ""),
-                "tags":        tags,
-                "file":        video_path,
-                "created_at":  str(datetime.now()),
-            }, f, indent=2)
-        jlog("info", msg=f"Package livré: {Path(video_path).name}")
+        # Déplacement atomique workspace/ → BUFFER/
+        video_filename = Path(video_path).name
+        dest_video     = self.buffer_dir / video_filename
+        try:
+            shutil.move(str(video_path), str(dest_video))
+            jlog("info", msg=f"Vidéo déplacée vers BUFFER: {video_filename}")
+        except Exception as e:
+            jlog("error", msg=f"Impossible de déplacer la vidéo vers BUFFER: {e}. Chemin original conservé.")
+            dest_video = Path(video_path)
+
+        # JSON au format meta/content attendu par nexus_arms.py
+        package = {
+            "meta": {
+                "video_path":    str(dest_video.resolve()),
+                "timestamp":     time.time(),
+                "published_on":  [],
+                "workflow_state": "PENDING",
+                "source":        meta.get("source", "nexus_brain"),
+            },
+            "content": {
+                "title":          title,
+                "description":    meta.get("description", ""),
+                "tags":           tags,
+                "priority_level": "NORMAL",
+                "created_at":     str(datetime.now()),
+            },
+        }
+
+        json_filename = dest_video.stem + ".json"
+        json_path     = self.buffer_dir / json_filename
+        temp_path     = self.buffer_dir / (json_filename + ".tmp")
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(package, f, indent=2, ensure_ascii=False)
+            os.replace(str(temp_path), str(json_path))
+            jlog("success", msg=f"Package livré dans BUFFER: {json_filename}")
+        except Exception as e:
+            jlog("error", msg=f"Erreur écriture JSON package: {e}")
+            if temp_path.exists():
+                try: os.remove(str(temp_path))
+                except: pass
+
+    def _cleanup_workspace(self, max_age_hours: int = 24):
+        """Supprime les fichiers dans workspace/ datant de plus de max_age_hours."""
+        cutoff = time.time() - max_age_hours * 3600
+        cleaned = 0
+        try:
+            for f in self.root_dir.iterdir():
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    try:
+                        f.unlink()
+                        cleaned += 1
+                    except Exception as e:
+                        jlog("warning", msg=f"Impossible de supprimer {f.name}: {e}")
+            if cleaned:
+                jlog("info", msg=f"Workspace nettoyé: {cleaned} fichier(s) >24h supprimé(s)")
+        except Exception as e:
+            jlog("warning", msg=f"Erreur nettoyage workspace: {e}")
 
     # ─────────────────────────────────────────────────────────────────────
     # MODE DA (FAST TEST)
@@ -1887,7 +1978,7 @@ class NexusBrain:
 
         if not script_data:
             topic       = await self._step_0_brainstorm_topic()
-            script_data = await self._step_1_ideation(topic, "INSIDER")
+            script_data = await self._step_1_ideation(topic, random.choice(["CLASH", "INSIDER", "MENTOR", "NEWS"]))
             # FIX 2026-04-15: injection tags [DARK] pour inversions fond noir
             if script_data and script_data.get("scenes"):
                 script_data["scenes"] = _inject_dark_tags(script_data["scenes"])
@@ -1958,7 +2049,7 @@ class NexusBrain:
             current_date = datetime.now().strftime("%Y-%m-%d")
             try:
                 topic  = await self._step_0_brainstorm_topic()
-                script = await self._step_1_ideation(topic, "INSIDER")
+                script = await self._step_1_ideation(topic, random.choice(["CLASH", "INSIDER", "MENTOR", "NEWS"]))
                 # FIX 2026-04-15: injection tags [DARK] pour inversions fond noir
                 if script and script.get("scenes"):
                     script["scenes"] = _inject_dark_tags(script["scenes"])
@@ -1980,6 +2071,7 @@ class NexusBrain:
 
                     if vid:
                         await self._deliver_package(vid, script)
+                        self._cleanup_workspace()
                         self.last_run_date = current_date
                         jlog("success", msg=f"Cycle complet V38: {current_date}")
                 else:

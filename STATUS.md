@@ -4,7 +4,7 @@
 | Fichier | Statut | Dépendances | Ce qui manque |
 |---------|--------|-------------|---------------|
 | **RACINE** | | | |
-| `nexus_brain.py` | ✅ complet | `tools/graphics.py`, `tools/burner.py`, `tools/tts_manager.py`, `tools/compositor.py`, `tools/animator.py`, `tools/timeline.py`, `common.py`, `prompts/templates.py`, ElevenLabs API, FFmpeg | FIX 2026-04-15 : scène 0 exclue des broll_indices. FIX 2026-04-16 : `_DARK_TRIGGER_WORDS` + `_inject_dark_tags()` → injection `[DARK]` sur 2 mots forts par script (run_da_mode + run_daemon) |
+| `nexus_brain.py` | ✅ complet | `tools/graphics.py`, `tools/burner.py`, `tools/tts_manager.py`, `tools/compositor.py`, `tools/animator.py`, `tools/timeline.py`, `common.py`, `prompts/templates.py`, ElevenLabs API, FFmpeg | FIX 2026-04-15 : scène 0 exclue des broll_indices. FIX 2026-04-16 : `_DARK_TRIGGER_WORDS` + `_inject_dark_tags()` → injection `[DARK]` sur 2 mots forts par script (run_da_mode + run_daemon). FIX 2026-04-17 : collecte `dark_scene_intervals` depuis la timeline scène AVANT humanisation (re.sub strippait les tags) → passage explicite à `burn_subtitles()` |
 | `nexus_arms.py` | ✅ complet | `tools/tt_uploader.py`, `tools/yt_uploader.py`, `common.py`, `HOLDING/pacer_state.json` | — |
 | `nexus_daemon.py` | ✅ complet | `nexus_brain.py`, `nexus_arms.py`, `common.py`, FFmpeg (pre-flight) | — |
 | `common.py` | ✅ complet | `config.yaml`, `pyproject.toml`, FFprobe | — |
@@ -17,7 +17,7 @@
 | `.gitignore` | ✅ complet | — | Complété 2026-04-15 : `BUFFER/`, `REJECTED/`, `OUTPUT_VIDEO/`, `assets/cache/`, `nexus_system.log`, `*.mp4` + `!video_referencement.mp4`, JSONs de session |
 | **TOOLS/** | | | |
 | `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-Bold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | FIX 2026-04-15 : logo TikTok refait (note 'd' + trait vertical + glitch 3px) ; search pill → bordure bicolore cyan/rouge + mini logo + Inter-Regular |
-| `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | FIX 2026-04-16 : SparkleEngine → ★ statiques #7B2FD9 ±80px ; `_get_inversion_bg_color` noir pour toutes sauf CTA ; `_is_sparkle_inversion` toutes inversions noires ; détection `[DARK]` tags dans `burn_subtitles` |
+| `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | FIX 2026-04-16 : SparkleEngine → ★ statiques #7B2FD9 ±80px ; `_get_inversion_bg_color` noir pour toutes sauf CTA ; `_is_sparkle_inversion` toutes inversions noires. FIX 2026-04-17 : `burn_subtitles()` accepte `dark_scene_intervals` (List[Tuple[float,float]]) — remplace la détection word-level inopérante par injection directe des intervalles pré-calculés |
 | `tools/tts_manager.py` | ✅ complet | ElevenLabs API, aiohttp, `assets/cache/tts/` | Voix hardcodées (4 profils) — OK pour l'usage actuel |
 | `tools/motion_profiles.py` | ✅ complet | `tools/physics.py`, numpy | — |
 | `tools/physics.py` | ✅ complet | numpy | — |

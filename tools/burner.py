@@ -543,9 +543,10 @@ class SubtitleBurner:
     def burn_subtitles(
         self,
         video_clip,
-        timeline:       List[Tuple[float, float, str]],
-        broll_schedule: List[Tuple[float, float, str]] = None,
-        cta_start:      float = None,
+        timeline:             List[Tuple[float, float, str]],
+        broll_schedule:       List[Tuple[float, float, str]] = None,
+        cta_start:            float = None,
+        dark_scene_intervals: List[Tuple[float, float]] = None,
     ):
         """
         NEXUS_MASTER_V38: Pipeline burn avec:
@@ -621,18 +622,14 @@ class SubtitleBurner:
         # ── NEXUS_MASTER_V38: FIX #1 — Inversions proportionnelles ───────
         inv_intervals = self._compute_inversion_intervals(all_word_clips, duration)
 
-        # FIX 2026-04-15: Détecter les mots tagués [DARK] dans la timeline brute
-        # et les injecter comme inversions noires supplémentaires (avant le CTA).
-        dark_word_intervals = [
-            (round(ts, 3), round(te, 3))
-            for ts, te, w in words
-            if "[DARK]" in w.upper()
-        ]
-        if dark_word_intervals:
-            # Insérer avant la dernière inversion (CTA), sans chevaucher les existantes
+        # FIX 2026-04-15 (rev2): Injecter les intervalles [DARK] pré-calculés depuis
+        # nexus_brain.py AVANT que _build_synthetic_word_timeline_humanized() ne
+        # stripe les tags. La détection word-level est inopérante (tags strippés
+        # avant d'atteindre cette fonction) — on utilise dark_scene_intervals à la place.
+        if dark_scene_intervals:
             cta_inv = inv_intervals[-1] if inv_intervals else None
             merged  = list(inv_intervals[:-1]) if inv_intervals else []
-            for dt0, dt1 in dark_word_intervals:
+            for dt0, dt1 in dark_scene_intervals:
                 overlap = any(abs(dt0 - t0) < 0.8 for t0, _ in merged)
                 if not overlap and (cta_inv is None or dt1 < cta_inv[0] - 0.5):
                     merged.append((dt0, dt1))
@@ -640,7 +637,7 @@ class SubtitleBurner:
             if cta_inv:
                 merged.append(cta_inv)
             inv_intervals = merged
-            print(f"  🌑 [DARK] tags: {len(dark_word_intervals)} interval(s) injecté(s)")
+            print(f"  🌑 [DARK] scènes: {len(dark_scene_intervals)} interval(s) injecté(s)")
 
         # ── Étape 5: CTA Card dans TimelineEngine (z=15) ─────────────────
         if len(inv_intervals) >= 2:
