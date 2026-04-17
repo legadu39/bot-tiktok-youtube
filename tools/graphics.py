@@ -553,9 +553,9 @@ _BROLL_STYLES_V36 = [
     # Style 2 — Teal Accent (mots positifs, gains)
     ("teal_accent",  (105, 228, 220), ( 45, 175, 168), ( 14,  14,  26),
                      (123,  44, 191), False),
-    # Style 3 — Light Clean (contenu neutre)
-    ("light_clean",  (248, 248, 252), (230, 230, 238), ( 25,  25,  25),
-                     (105, 228, 220), True ),
+    # Style 3 — Light Clean (contenu neutre) — fond assez sombre pour contraste sur vidéo blanche
+    ("light_clean",  (220, 220, 235), (205, 205, 220), ( 25,  25,  25),
+                     (155,  89, 182), True ),
     # Style 4 — Charcoal Premium (scènes de transition)
     ("charcoal",     ( 42,  42,  54), ( 28,  28,  38), (235, 235, 235),
                      (208, 122, 148), False),
