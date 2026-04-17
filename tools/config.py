@@ -145,7 +145,7 @@ SAFE_RIGHT = 80
 
 # ── B-Roll Card ───────────────────────────────────────────────────────────────
 
-BROLL_CARD_WIDTH_RATIO    = 0.530
+BROLL_CARD_WIDTH_RATIO    = 0.520   # ~52% largeur — conforme référence (300/576px)
 BROLL_CARD_CENTER_Y_RATIO = 0.474
 BROLL_TEXT_STAYS_PUT      = True
 BROLL_SHADOW_EXPAND_PX    = 40
