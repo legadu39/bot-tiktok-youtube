@@ -1405,6 +1405,26 @@ class NexusBrain:
             if scene.get("_broll_image_path") and os.path.exists(scene["_broll_image_path"]):
                 continue
 
+            # ── Tentative Pexels (timeout 5s) ──────────────────────────────
+            pexels_path = None
+            try:
+                _pexels_prompt = _sanitize_visual_prompt(
+                    scene.get("visual_prompt", scene.get("text", ""))
+                )
+                pexels_path = self.vault.fetch_and_cache(_pexels_prompt, timeout=5)
+            except Exception:
+                pass
+
+            if pexels_path and os.path.exists(pexels_path):
+                scene["_broll_image_path"] = pexels_path
+                self.vault.mark_as_used(pexels_path)
+                broll_count += 1
+                jlog("info", msg=(
+                    f"[VAULT] image Pexels → {Path(pexels_path).name} (scène {i})"
+                ))
+                continue
+
+            # ── Fallback procédural ─────────────────────────────────────────
             broll_path = os.path.join(self.root_dir, f"broll_v38_{i:03d}.jpg")
             try:
                 generate_procedural_broll_card(
@@ -1417,8 +1437,8 @@ class NexusBrain:
                 scene["_broll_image_path"] = broll_path
                 broll_count += 1
                 jlog("info", msg=(
-                    f"NEXUS_MASTER_V38: B-Roll overlay scène {i} → "
-                    f"{Path(broll_path).name}"
+                    f"[VAULT] fallback procédural → "
+                    f"{Path(broll_path).name} (scène {i})"
                 ))
             except Exception as e:
                 jlog("warning", msg=f"B-Roll procédural échoué scène {i}: {e}")

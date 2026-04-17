@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 ### bot tiktok youtube/tools/asset_vault.py
 import os
+import io
 import json
 import time
 import shutil
@@ -10,6 +11,7 @@ import glob
 import wave
 import math
 import struct
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
@@ -260,6 +262,174 @@ class AssetVault:
                 break
         if found:
             self._save_index()
+
+    # -------------------------------------------------------------------------
+    # PEXELS AUTO-FEED
+    # -------------------------------------------------------------------------
+
+    _FR_TO_EN = {
+        "argent": "money", "argents": "money", "finances": "finance", "financier": "finance",
+        "trading": "trading", "trader": "trader", "bourse": "stock market",
+        "investissement": "investment", "investir": "investment",
+        "graphique": "chart", "graphiques": "chart",
+        "entreprise": "business", "entreprises": "business",
+        "stratégie": "strategy", "stratégies": "strategy",
+        "succès": "success", "réussite": "success",
+        "comptable": "accounting", "comptabilité": "accounting",
+        "fiscalité": "tax", "impôt": "tax", "impôts": "tax",
+        "croissance": "growth", "profit": "profit", "gain": "gain",
+        "smartphone": "smartphone", "téléphone": "phone",
+        "ordinateur": "computer", "écran": "screen",
+        "cerveau": "brain", "feu": "fire", "fusée": "rocket",
+        "diamant": "diamond", "cadenas": "lock", "alerte": "alert",
+        "données": "data", "code": "code", "technologie": "technology",
+        "marché": "market", "économie": "economy",
+        "main": "hand", "mains": "hands", "bureau": "desk", "travail": "work",
+        "réunion": "meeting", "équipe": "team", "personne": "person",
+        "homme": "man", "femme": "woman", "affaires": "business",
+        "propriété": "property", "immobilier": "real estate",
+        "voiture": "car", "nature": "nature", "ville": "city",
+    }
+
+    def _extract_pexels_query(self, description: str) -> str:
+        clean = re.sub(r'\[.*?\]', '', description).strip()
+        words = re.findall(r'[a-zA-ZÀ-ÿ]+', clean)
+        stop_fr = {
+            "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou",
+            "en", "sur", "pour", "par", "avec", "dans", "que", "qui", "est",
+            "sont", "une", "aux", "au", "ce", "cette", "ces", "son", "sa",
+            "ses", "leur", "leurs", "il", "elle", "ils", "elles", "on",
+            "the", "a", "an", "of", "and", "or", "in", "on", "for", "by",
+            "to", "with", "is", "image", "photo", "generate", "cinematic",
+            "abstract", "background", "pattern", "repeater", "grid",
+        }
+        keywords = []
+        for w in words:
+            w_low = w.lower()
+            if w_low in stop_fr or len(w_low) < 3:
+                continue
+            translated = self._FR_TO_EN.get(w_low, w_low)
+            if translated not in keywords:
+                keywords.append(translated)
+            if len(keywords) >= 3:
+                break
+        return " ".join(keywords) if keywords else ""
+
+    def fetch_and_cache(self, description: str, timeout: int = 5) -> Optional[str]:
+        """
+        Cherche une photo Pexels correspondant à la description, la redimensionne
+        en 1080×1920 et la met en cache dans assets_vault/.
+        Retourne le chemin local ou None en cas d'échec.
+        """
+        import requests
+        from PIL import Image as _PIL
+
+        api_key = os.getenv("PEXELS_API_KEY", "")
+        if not api_key or api_key in ("YOUR_PEXELS_KEY_HERE", ""):
+            return None
+
+        query = self._extract_pexels_query(description)
+        if not query:
+            return None
+
+        query_hash = hashlib.md5(query.lower().encode()).hexdigest()[:12]
+        cache_path = self.assets_dir / f"pexels_{query_hash}.jpg"
+
+        # Cache hit — index
+        for asset in self.index.get("assets", []):
+            if asset.get("pexels_query_hash") == query_hash:
+                lp = asset.get("local_path", "")
+                if os.path.exists(lp):
+                    return lp
+
+        # Cache hit — fichier sur disque (index désynchronisé)
+        if cache_path.exists():
+            return str(cache_path)
+
+        # Appel API
+        try:
+            resp = requests.get(
+                "https://api.pexels.com/v1/search",
+                headers={"Authorization": api_key},
+                params={
+                    "query": query,
+                    "orientation": "portrait",
+                    "per_page": 5,
+                    "size": "large",
+                },
+                timeout=timeout,
+            )
+        except Exception as e:
+            jlog("warning", msg=f"[VAULT] Pexels search timeout/error: {e}")
+            return None
+
+        if resp.status_code != 200:
+            jlog("warning", msg=f"[VAULT] Pexels API {resp.status_code} pour '{query}'")
+            return None
+
+        photos = resp.json().get("photos", [])
+        if not photos:
+            jlog("vault", msg=f"[VAULT] Pexels: aucune photo pour '{query}'")
+            return None
+
+        # Meilleure photo : portrait le plus grand
+        best = max(photos, key=lambda p: p.get("height", 0))
+        src = best.get("src", {})
+        img_url = src.get("original") or src.get("large2x") or src.get("large")
+        pexels_id = best.get("id", "")
+
+        if not img_url:
+            return None
+
+        # Téléchargement
+        try:
+            img_resp = requests.get(img_url, timeout=timeout)
+        except Exception as e:
+            jlog("warning", msg=f"[VAULT] Pexels download timeout: {e}")
+            return None
+
+        if img_resp.status_code != 200:
+            return None
+
+        # Crop centré + resize 1080×1920
+        try:
+            img = _PIL.open(io.BytesIO(img_resp.content)).convert("RGB")
+            target_w, target_h = 1080, 1920
+            img_w, img_h = img.size
+            scale = max(target_w / img_w, target_h / img_h)
+            new_w, new_h = int(img_w * scale), int(img_h * scale)
+            resample = getattr(_PIL, "LANCZOS", getattr(_PIL, "Resampling", None))
+            if hasattr(resample, "LANCZOS"):
+                resample = resample.LANCZOS
+            img = img.resize((new_w, new_h), resample)
+            left = (new_w - target_w) // 2
+            top  = (new_h - target_h) // 2
+            img  = img.crop((left, top, left + target_w, top + target_h))
+            img.save(str(cache_path), quality=90, optimize=True)
+        except Exception as e:
+            jlog("warning", msg=f"[VAULT] Pexels image processing error: {e}")
+            return None
+
+        # Enregistrement dans l'index
+        tokens = self._tokenize(description)
+        tokens.update(self._tokenize(query))
+        asset_entry = {
+            "id":                 f"AST_{int(time.time())}_{random.randint(1000, 9999)}",
+            "local_path":         str(cache_path),
+            "prompt":             description,
+            "keywords":           list(tokens),
+            "source":             "pexels",
+            "pexels_id":          pexels_id,
+            "pexels_query":       query,
+            "pexels_query_hash":  query_hash,
+            "created_at":         time.time(),
+            "last_used":          0,
+            "usage_count":        0,
+        }
+        self.index.setdefault("assets", []).append(asset_entry)
+        self._save_index()
+        jlog("vault", msg=f"[VAULT] Pexels → '{query}' sauvegardé ({cache_path.name})")
+        return str(cache_path)
 
     async def fetch_image(self, query: str, keywords: List[str] = []) -> str:
         match = self.find_best_match(query, keywords, is_hook=False)
