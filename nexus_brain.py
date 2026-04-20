@@ -1376,17 +1376,19 @@ class NexusBrain:
                 img_path = matched_asset["local_path"]
                 broll_ok = True
 
-                try:
-                    from PIL import Image as _PilImg
-                    with _PilImg.open(img_path) as _im:
-                        _iw, _ih = _im.size
-                    canvas_pixels = 1080 * 1920
-                    coverage = (_iw * _ih) / canvas_pixels
-                    if coverage > BROLL_MAX_COVERAGE_RATIO:
-                        broll_ok = False
-                        broll_rejected += 1
-                except Exception:
-                    pass
+                # Assets Pexels = plein écran natif → pas de vérification coverage
+                if matched_asset.get("source") != "pexels":
+                    try:
+                        from PIL import Image as _PilImg
+                        with _PilImg.open(img_path) as _im:
+                            _iw, _ih = _im.size
+                        canvas_pixels = 1080 * 1920
+                        coverage = (_iw * _ih) / canvas_pixels
+                        if coverage > BROLL_MAX_COVERAGE_RATIO:
+                            broll_ok = False
+                            broll_rejected += 1
+                    except Exception:
+                        pass
 
                 if broll_ok:
                     self.vault.mark_as_used(img_path)
