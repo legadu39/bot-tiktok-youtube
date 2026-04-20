@@ -1473,7 +1473,7 @@ class NexusBrain:
                 min_duration = 40.0,
             )
 
-            dummy_audio_path = os.path.join(self.root_dir, "silence_nexus_v38.mp3")
+            dummy_audio_path = os.path.join(self.root_dir, f"silence_nexus_{int(time.time())}.mp3")
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", str(estimated_duration), "-q:a", "9",
@@ -2036,7 +2036,8 @@ class NexusBrain:
             audio_path = await self._step_3_audio(script_data["scenes"], speed=1.0)
 
         imgs, broll_indices = await self._step_2_visuals(script_data["scenes"])
-        vid = await self._step_4_assembly(script_data, imgs, broll_indices, audio_path, safe_mode=False)
+        is_fallback = script_data.get("meta", {}).get("is_fallback", False)
+        vid = await self._step_4_assembly(script_data, imgs, broll_indices, audio_path, safe_mode=is_fallback)
 
         if vid:
             jlog("success", msg=f"✅ Test DA V38 terminé: {vid}")
