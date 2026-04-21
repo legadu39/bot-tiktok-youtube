@@ -396,11 +396,11 @@ class UploadRunner:
             
             try:
                 snap = self._eval(JS_UPLOAD_SIGNS, True) or {}
-                
+
                 if snap.get("uploaded") or snap.get("replace"):
                     jlog("upload_signs_detected", stage="g2", ui_state=snap)
                     return True
-                    
+
             except Exception:
                 pass
             

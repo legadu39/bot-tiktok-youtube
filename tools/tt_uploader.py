@@ -104,7 +104,7 @@ def _get_fuzzy_finder_js(text_to_insert: str) -> str:
             }
         });
 
-        if (bestEl && maxScore > 20) {
+        if (bestEl && maxScore > 10) {
             // Action sur le gagnant
             bestEl.focus();
             
@@ -183,7 +183,7 @@ def run_one_file(
     upload_path_obj = resolved
     if NEUTRALIZE_FILENAME_FOR_PREFILL:
         try:
-            upload_path_str = _make_neutral_upload_copy(resolved)
+            upload_path_str, _tmp_dir = _make_neutral_upload_copy(resolved)
             upload_path_obj = Path(upload_path_str)
             jlog("info", msg="Neutral copy created", path=upload_path_str)
         except Exception as e:
@@ -308,7 +308,7 @@ class TikTokUploader:
                 and_guard=True,
                 ack_timeout=60.0,
                 nudge_after=10.0,
-                max_wait_post=120.0,
+                max_wait_post=300.0,
                 dry_run=False,
                 title=None,
                 description=description,

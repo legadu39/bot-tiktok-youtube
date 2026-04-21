@@ -178,11 +178,12 @@ JS_SNAPSHOT_POST = r"""
   let cand=btns.find(b=>/^(post|publier)$/i.test(text(b)));
   if(!cand){ cand=btns.find(b=> (b.dataset && b.dataset.e2e && /post/i.test(b.dataset.e2e))); }
   if(!cand){
-    cand=btns.find(b=>{const s=getComputedStyle(b); return /rgb\(/i.test(s.backgroundColor)&&s.backgroundColor.includes('255')&&(s.backgroundColor.includes('59')||s.backgroundColor.includes('43')||s.backgroundColor.includes('84'));});
+    // Fallback couleur : pink TikTok rgb(254,44,85) ou variantes
+    cand=btns.find(b=>{const s=getComputedStyle(b); const c=s.backgroundColor||''; return /rgb\(25[0-9]/.test(c)||/rgb\(254/.test(c)||c.includes('254, 44')||c.includes('255, 59')||c.includes('255, 43');});
   }
   if(!cand) return {present:false,visible:false,disabled:true,classes:'',color:'',text:''};
   const s=getComputedStyle(cand);
-  const dis=!!(cand.disabled || cand.getAttribute('aria-disabled')==='true' || (cand.className||'').toLowerCase().includes('disabled'));
+  const dis=!!(cand.disabled || cand.getAttribute('aria-disabled')==='true' || (cand.className||'').toLowerCase().includes('disabled') || s.opacity<0.5 || s.pointerEvents==='none');
   return {present:true,visible:vis(cand),disabled:dis,classes:(cand.className||''),color:(s.backgroundColor||''),text:text(cand)};
 })()
 """
