@@ -102,11 +102,13 @@ TYPO_SCALE_MUTED:   float = 1.10
 TYPO_SCALE_STOP:    float = 0.85
 BROLL_MAX_COVERAGE_RATIO: float = 0.70
 
-SCRIPT_MIN_SCENES: int = 8
-# NEXUS_MASTER_V38: Abaissé de 60 à 35 — les scènes visuelles ([BROLL], [ICON],
-# [PRICE], [REPEATER]) ont 0 mots comptables après stripping des tags.
-# Avec 42-55 scènes dont ~12 visuelles/pauses, les ~35 scènes texte × 1.5 mots = ~52 mots.
-SCRIPT_MIN_WORDS:  int = 35
+SCRIPT_MIN_SCENES: int = 30
+# FIX 2026-04-21: Relevé de 35 → 80.
+# Le prompt wrap_v3_prompt() exige explicitement "100 à 140 mots au total".
+# L'ancienne valeur 35 (et le plancher max(30,...)) permettait à un script de
+# 30 mots de passer la validation — 3x sous le minimum réel.
+# 80 = plancher absolu (marge pour les scènes visuelles dont le TTS compte peu).
+SCRIPT_MIN_WORDS:  int = 80
 SCRIPT_TTS_WORDS_PER_SEC: float = 2.5
 
 BROLL_TARGET_COVERAGE_RATIO:  float = 0.35
@@ -237,17 +239,44 @@ _VISUAL_PROMPT_POOL = [
 
 
 def _diversify_visual_prompts(scenes: List[Dict]) -> List[Dict]:
-    sanitized = [_sanitize_visual_prompt(s.get("visual_prompt", "")) for s in scenes]
-    unique    = set(sanitized)
-    if len(unique) > 1:
-        return scenes
-    jlog("info", msg=(
-        f"FIX V35.1: Auto-diversification de {len(scenes)} visual_prompts "
-        f"(tous = '{list(unique)[0]}')"
-    ))
-    pool = _VISUAL_PROMPT_POOL.copy()
-    for i in range(len(scenes)):
-        scenes[i]["visual_prompt"] = pool[i % len(pool)]
+    # FIX 2026-04-21: ne comparer que les prompts des scènes VISUELLES
+    # (broll/icon/price/repeater). Les scènes texte ont "FOND BLANC #FFFFFF STRICT"
+    # en prompt → len(unique) > 1 était toujours vrai → diversification jamais déclenchée.
+    visual_types = {"broll", "icon", "price", "repeater"}
+    visual_scenes_idx = [
+        i for i, s in enumerate(scenes)
+        if s.get("visual_type", "text") in visual_types
+    ]
+
+    if visual_scenes_idx:
+        visual_prompts = [
+            _sanitize_visual_prompt(scenes[i].get("visual_prompt", ""))
+            for i in visual_scenes_idx
+        ]
+        unique_visual = set(visual_prompts)
+        if len(unique_visual) >= len(visual_scenes_idx):
+            return scenes  # tous différents → rien à faire
+        jlog("info", msg=(
+            f"FIX V35.1: Auto-diversification de {len(visual_scenes_idx)} prompts visuels "
+            f"({len(unique_visual)} uniques sur {len(visual_scenes_idx)} scènes visuelles)"
+        ))
+        pool = _VISUAL_PROMPT_POOL.copy()
+        for rank, idx in enumerate(visual_scenes_idx):
+            scenes[idx]["visual_prompt"] = pool[rank % len(pool)]
+    else:
+        # Aucune scène visuelle explicite → diversifier toutes les scènes
+        sanitized = [_sanitize_visual_prompt(s.get("visual_prompt", "")) for s in scenes]
+        unique    = set(sanitized)
+        if len(unique) > 1:
+            return scenes
+        jlog("info", msg=(
+            f"FIX V35.1: Auto-diversification de {len(scenes)} visual_prompts "
+            f"(tous = '{list(unique)[0]}')"
+        ))
+        pool = _VISUAL_PROMPT_POOL.copy()
+        for i in range(len(scenes)):
+            scenes[i]["visual_prompt"] = pool[i % len(pool)]
+
     return scenes
 
 
@@ -949,10 +978,13 @@ class NexusBrain:
             scene_blocks = re.split(r"SCENE\s*\d+", text, flags=re.IGNORECASE)
 
             # NEXUS_MASTER_V38: Regex pour les visual element tags
+            # FIX 2026-04-21: _RE_REPEATER utilisait \w+ → ne matchait pas les params
+            # multi-mots comme [REPEATER:trading chart] → scène classée "text" au lieu
+            # de "repeater". Corrigé en [^\]]+ (cohérent avec la regex timeline ligne ~1795).
             _RE_BROLL    = re.compile(r'\[BROLL\s*:\s*(.+?)\]', re.IGNORECASE)
-            _RE_ICON     = re.compile(r'\[ICON\s*:\s*(\w+)\]', re.IGNORECASE)
+            _RE_ICON     = re.compile(r'\[ICON\s*:\s*([^\]]+)\]', re.IGNORECASE)
             _RE_PRICE    = re.compile(r'\[PRICE\s*:\s*(.+?)\]', re.IGNORECASE)
-            _RE_REPEATER = re.compile(r'\[REPEATER\s*:\s*(\w+)\]', re.IGNORECASE)
+            _RE_REPEATER = re.compile(r'\[REPEATER\s*:\s*([^\]]+)\]', re.IGNORECASE)
 
             visual_counts = {"broll": 0, "icon": 0, "price": 0, "repeater": 0, "pause": 0}
 
@@ -1111,8 +1143,11 @@ class NexusBrain:
             jlog("warning", msg=f"Script rejeté — {n_scenes} scènes (minimum {SCRIPT_MIN_SCENES}).")
             return False
 
-        # NEXUS_MASTER_V38: Seuil de mots minimum abaissé (le TTS lit aussi les visuels)
-        effective_min_words = max(30, SCRIPT_MIN_WORDS - (n_visual * 3) - (n_pause * 2))
+        # FIX 2026-04-21: plancher relevé de max(30,...) → max(80,...).
+        # La formule soustrait des points pour les scènes visuelles/pauses (qui ont
+        # peu/pas de mots comptables), mais le plancher ne peut pas descendre sous 80
+        # — aligné avec la règle n°1 du prompt : "100 à 140 mots au total".
+        effective_min_words = max(80, SCRIPT_MIN_WORDS - (n_visual * 3) - (n_pause * 2))
         if total_all_words < effective_min_words:
             jlog("warning", msg=(
                 f"Script rejeté — {total_all_words} mots total "
@@ -1147,6 +1182,50 @@ class NexusBrain:
                 script_data["meta"] = {}
             script_data["meta"]["_needs_prompt_diversification"] = True
 
+        # ── FIX 2026-04-21: Checks tags obligatoires (règle 7 du prompt) ──────
+        # Le prompt exige AU MOINS : 1 [BROLL] + 1 [ICON] + 1 [PRICE] ou [REPEATER].
+        visual_counts = {"broll": 0, "icon": 0, "price": 0, "repeater": 0}
+        for s in scenes:
+            vt = s.get("visual_type", "text")
+            if vt in visual_counts:
+                visual_counts[vt] += 1
+
+        missing_tags = []
+        if visual_counts["broll"] < 1:
+            missing_tags.append("au moins 1 scène [BROLL:...]")
+        if visual_counts["icon"] < 1:
+            missing_tags.append("au moins 1 scène [ICON:...]")
+        if visual_counts["price"] < 1 and visual_counts["repeater"] < 1:
+            missing_tags.append("au moins 1 scène [PRICE:...] ou [REPEATER:...]")
+
+        if missing_tags:
+            reason = "Tags visuels manquants : " + "; ".join(missing_tags) + "."
+            jlog("warning", msg=f"Script rejeté — {reason}")
+            if "meta" not in script_data:
+                script_data["meta"] = {}
+            script_data["meta"]["_rejection_reason"] = reason
+            return False
+
+        # ── FIX 2026-04-21: Détection phrase tronquée (dernière scène texte) ───
+        _TRAILING_STOPWORDS = {
+            "de", "du", "des", "le", "la", "les", "un", "une", "et", "en",
+            "à", "au", "aux", "par", "pour", "sur", "dans", "avec", "que",
+            "qui", "dont", "où", "se", "si", "or", "ni", "car", "mais",
+        }
+        if text_scenes:
+            last_text = re.sub(r'\[.*?\]', '', text_scenes[-1].get("text", "")).strip().lower()
+            last_word = last_text.split()[-1].rstrip(".,!?;:") if last_text.split() else ""
+            if last_word in _TRAILING_STOPWORDS:
+                reason = (
+                    f"Phrase tronquée : la dernière scène texte se termine "
+                    f"sur le mot de liaison «{last_word}»."
+                )
+                jlog("warning", msg=f"Script rejeté — {reason}")
+                if "meta" not in script_data:
+                    script_data["meta"] = {}
+                script_data["meta"]["_rejection_reason"] = reason
+                return False
+
         est_duration = total_all_words / SCRIPT_TTS_WORDS_PER_SEC
         jlog("info", msg=(
             f"Script validé ✓ — {n_scenes} scènes "
@@ -1154,7 +1233,9 @@ class NexusBrain:
             f"{total_all_words} mots ({total_text_words} texte + {total_tts_words} TTS) | "
             f"{avg_words_per_text_scene:.1f} mots/scène texte | "
             f"durée estimée {est_duration:.1f}s | "
-            f"{len(unique_prompts)} prompt(s) distincts"
+            f"{len(unique_prompts)} prompt(s) distincts | "
+            f"broll={visual_counts['broll']} icon={visual_counts['icon']} "
+            f"price={visual_counts['price']} repeater={visual_counts['repeater']}"
         ))
         return True
 
@@ -1257,41 +1338,100 @@ class NexusBrain:
                 jlog("error", msg=f"Evergreen load failed: {selected.name}", error=str(e))
         return None
 
-    async def _step_1_ideation(self, topic: str, profile_type: str = "INSIDER") -> Dict:
-        jlog("step", msg=f"Step 1: Ideation pour '{topic}'")
-        sys_prompt   = wrap_v3_prompt(topic, profile_type)
-        raw_response = await self._invoke_cli_agent(sys_prompt, context_tag="scripting")
-        script_data  = None
+    def _parse_and_validate(self, raw_response: str, topic: str) -> Optional[Dict]:
+        """
+        FIX 2026-04-21: Helper factorisé — parse + ghost-text purge + validation.
+        Retourne le script_data validé ou None.
+        Écrit le motif de rejet dans script_data["meta"]["_rejection_reason"]
+        pour que _step_1_ideation puisse le passer au LLM en retry.
+        """
+        script_data = None
 
-        if raw_response:
-            if "=== DEBUT SCRIPT ===" in raw_response or "SCENE 1" in raw_response:
-                script_data = self._parse_script_from_text(raw_response)
+        if "=== DEBUT SCRIPT ===" in raw_response or "SCENE 1" in raw_response:
+            script_data = self._parse_script_from_text(raw_response)
 
-            if not script_data:
-                try:
-                    clean_json = raw_response
-                    if "```json" in raw_response:
-                        clean_json = raw_response.split("```json")[1].split("```")[0]
-                    elif "```" in raw_response:
-                        clean_json = raw_response.split("```")[1].split("```")[0]
-                    possible_json = json.loads(clean_json)
-                    if "scenes" in possible_json:
-                        script_data = possible_json
-                        if script_data and "scenes" in script_data:
-                            original_count = len(script_data["scenes"])
-                            script_data["scenes"] = [
-                                s for s in script_data["scenes"]
-                                if not _is_ghost_text(s.get("text", ""))
-                            ]
-                            purged = original_count - len(script_data["scenes"])
-                            if purged > 0:
-                                jlog("warning", msg=f"FIX_GHOST_TEXT: {purged} scène(s) fantôme(s) purgée(s).")
-                except Exception:
-                    pass
+        if not script_data:
+            try:
+                clean_json = raw_response
+                if "```json" in raw_response:
+                    clean_json = raw_response.split("```json")[1].split("```")[0]
+                elif "```" in raw_response:
+                    clean_json = raw_response.split("```")[1].split("```")[0]
+                possible_json = json.loads(clean_json)
+                if "scenes" in possible_json:
+                    script_data = possible_json
+            except Exception:
+                pass
+
+        if script_data and "scenes" in script_data:
+            original_count = len(script_data["scenes"])
+            script_data["scenes"] = [
+                s for s in script_data["scenes"]
+                if not _is_ghost_text(s.get("text", ""))
+            ]
+            purged = original_count - len(script_data["scenes"])
+            if purged > 0:
+                jlog("warning", msg=f"FIX_GHOST_TEXT: {purged} scène(s) fantôme(s) purgée(s).")
 
         if script_data and "scenes" in script_data:
             if not self._validate_script_density(script_data):
-                script_data = None
+                # Retourner quand-même script_data (pas None) pour que le motif de rejet
+                # contenu dans script_data["meta"]["_rejection_reason"] soit accessible
+                # par l'appelant. L'appelant vérifie "_rejection_reason" pour savoir
+                # si le script est valide.
+                return script_data
+
+        return script_data
+
+    async def _step_1_ideation(self, topic: str, profile_type: str = "INSIDER") -> Dict:
+        # FIX 2026-04-21: retry avec feedback du motif de rejet transmis au LLM.
+        # Max 2 tentatives supplémentaires si le premier script est rejeté.
+        MAX_IDEATION_RETRIES = 2
+        jlog("step", msg=f"Step 1: Ideation pour '{topic}'")
+
+        script_data    = None
+        rejection_hint = None   # motif du dernier rejet, passé au LLM en retry
+
+        for attempt in range(1, MAX_IDEATION_RETRIES + 2):   # 1, 2, 3
+            if attempt > 1:
+                jlog("warning", msg=(
+                    f"Step 1: Retry #{attempt - 1}/{MAX_IDEATION_RETRIES} "
+                    f"— feedback LLM : «{rejection_hint}»"
+                ))
+
+            # Injecter le motif de rejet dans le prompt si disponible
+            feedback_suffix = ""
+            if rejection_hint:
+                feedback_suffix = (
+                    f"\n\n⚠️ ATTENTION — Script précédent REJETÉ pour ce motif : "
+                    f"«{rejection_hint}»\n"
+                    f"CORRIGE IMPÉRATIVEMENT ce problème dans ta nouvelle version."
+                )
+
+            sys_prompt   = wrap_v3_prompt(topic, profile_type) + feedback_suffix
+            raw_response = await self._invoke_cli_agent(sys_prompt, context_tag="scripting")
+
+            if not raw_response:
+                rejection_hint = "Aucune réponse du LLM."
+                continue
+
+            candidate = self._parse_and_validate(raw_response, topic)
+
+            # Valide si parsé ET pas de motif de rejet dans les métadonnées
+            is_valid = (
+                candidate is not None
+                and "scenes" in candidate
+                and not candidate.get("meta", {}).get("_rejection_reason")
+            )
+            if is_valid:
+                script_data = candidate
+                break
+
+            # Récupérer le motif pour le prochain retry
+            rejection_hint = (
+                (candidate or {}).get("meta", {}).get("_rejection_reason")
+                or "Script parsé mais invalide (format ou densité insuffisante)."
+            )
 
         if script_data and "scenes" in script_data:
             nb_scenes = len(script_data["scenes"])
@@ -1301,7 +1441,7 @@ class NexusBrain:
             script_data["meta"]["source"] = "agent_cli_dynamique"
             return script_data
 
-        jlog("warning", msg="CLI parsing échoué ou rejeté → Evergreen Vault...")
+        jlog("warning", msg="CLI parsing échoué ou rejeté après retries → Evergreen Vault...")
         evergreen_script = self._get_evergreen_script()
         if evergreen_script:
             if self._validate_script_density(evergreen_script):

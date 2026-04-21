@@ -605,7 +605,10 @@ def generate_procedural_broll_card(
     card_h = int(card_w * 0.55)
 
     # ── Extraction et nettoyage du texte ─────────────────────────────────
-    clean   = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE)\]', '', scene_text, flags=re.IGNORECASE).strip()
+    # FIX 2026-04-21: strip aussi les tags visuels [BROLL:...], [ICON:...],
+    # [PRICE:...], [REPEATER:...] qui n'étaient pas couverts avant → texte brut
+    # de tag affiché sur la carte (ex: "[BROLL:trading" en display).
+    clean   = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', scene_text, flags=re.IGNORECASE).strip()
     words   = [w for w in clean.split() if re.sub(r'[^\w]', '', w)]
     display = ' '.join(words[:3]) if words else "—"
 
