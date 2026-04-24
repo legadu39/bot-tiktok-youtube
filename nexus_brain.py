@@ -1540,6 +1540,15 @@ class NexusBrain:
             else:
                 vault_misses += 1
 
+        # FIX 2026-04-24: tracker les images déjà attribuées pour éviter les doublons.
+        # fetch_and_cache retourne le même fichier caché pour des prompts similaires
+        # → plusieurs scènes consécutives recevaient la même photo Pexels.
+        assigned_paths: set = {
+            s["_broll_image_path"]
+            for s in scenes
+            if s.get("_broll_image_path") and os.path.exists(s["_broll_image_path"])
+        }
+
         for i in broll_indices:
             if i >= len(scenes):
                 continue
@@ -1557,9 +1566,15 @@ class NexusBrain:
             except Exception:
                 pass
 
+            # FIX 2026-04-24: rejeter les images déjà attribuées à une autre scène
+            if pexels_path and pexels_path in assigned_paths:
+                jlog("info", msg=f"[VAULT] doublon Pexels ignoré pour scène {i} → fallback procédural")
+                pexels_path = None
+
             if pexels_path and os.path.exists(pexels_path):
                 scene["_broll_image_path"] = pexels_path
                 self.vault.mark_as_used(pexels_path)
+                assigned_paths.add(pexels_path)
                 broll_count += 1
                 jlog("info", msg=(
                     f"[VAULT] image Pexels → {Path(pexels_path).name} (scène {i})"
@@ -1784,7 +1799,10 @@ class NexusBrain:
                             + clean.count('!') * 5 + clean.count('?') * 5)
                 return float(base_len + pauses)
 
-            weights      = [estimate_reading_weight(s.get("text", "")) for s in scenes]
+            # FIX 2026-04-24: utiliser tts_text (texte sans tags) pour le poids.
+            # Avant: scene["text"] avec strip → ICON/REPEATER purs obtenaient weight=1
+            # → durée ~0.026s → fenêtre invisible (0-1 frame à 30fps).
+            weights      = [estimate_reading_weight(s.get("tts_text", s.get("text", ""))) for s in scenes]
             total_weight = sum(weights)
 
             if total_weight > 0:
@@ -1792,10 +1810,14 @@ class NexusBrain:
             else:
                 raw_durations = [total_duration / len(scenes) for _ in scenes]
 
+            _VISUAL_MIN_DUR = 1.5  # plancher pour scènes visuelles pures
             durations = []
             for s, d in zip(scenes, raw_durations):
+                vtype = s.get("visual_type", "text")
                 if "[PAUSE]" in s.get("text", "").upper():
                     durations.append(max(d, self.pause_min_duration))
+                elif vtype in ("icon", "repeater", "price"):
+                    durations.append(max(d, _VISUAL_MIN_DUR))
                 else:
                     durations.append(d)
 
