@@ -1034,6 +1034,14 @@ _ICON_MAP = {
     "diamant": "💎","diamond": "💎",
     "etoile": "★", "star": "★",
     "fleche": "→", "arrow": "→",
+    # P1B FIX 2026-04-27: icônes manquantes du prompt (shield, crown, etc.)
+    "shield": "🛡", "bouclier": "🛡",
+    "crown": "👑",  "couronne": "👑",
+    "brain": "🧠",  "cerveau": "🧠",
+    "target": "🎯", "cible": "🎯",
+    "lightning": "⚡","eclair": "⚡",
+    "clock": "⏰",  "horloge": "⏰",
+    "phone": "📱",  "telephone": "📱",
 }
 
 

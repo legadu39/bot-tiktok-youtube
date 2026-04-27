@@ -237,6 +237,17 @@ _VISUAL_PROMPT_POOL = [
     "capital allocation financial growth",
 ]
 
+# P2 FIX 2026-04-27: Queries Pexels curatées pour les scènes texte broll
+# (non-BROLL explicites dont le visual_prompt est générique)
+_PEXELS_TRADING_QUERIES = [
+    "trading order block smart money concept",
+    "forex trader profit win screen green",
+    "trader watching chart waiting patience dark",
+    "candlestick chart technical analysis fibonacci",
+    "institutional investor hedge fund office",
+    "trading chart liquidity zones analysis",
+]
+
 
 def _diversify_visual_prompts(scenes: List[Dict]) -> List[Dict]:
     # FIX 2026-04-21: ne comparer que les prompts des scènes VISUELLES
@@ -1568,6 +1579,10 @@ class NexusBrain:
                 _pexels_prompt = _sanitize_visual_prompt(
                     scene.get("visual_prompt", scene.get("text", ""))
                 )
+                # P2 FIX 2026-04-27: pour les scènes texte non-BROLL, utiliser des
+                # queries SMC/trading curatées plutôt que le texte brut de la scène.
+                if scene.get("visual_type", "text") == "text":
+                    _pexels_prompt = _PEXELS_TRADING_QUERIES[i % len(_PEXELS_TRADING_QUERIES)]
                 pexels_path = self.vault.fetch_and_cache(_pexels_prompt, timeout=5)
             except Exception:
                 pass
@@ -1964,6 +1979,14 @@ class NexusBrain:
                     f"→ fond noir activé aux instants : {dark_scene_intervals}"
                 ))
 
+            # P1A FIX 2026-04-27: stripper [DARK] du texte subtitle APRÈS collecte
+            # des intervalles, AVANT humanisation — sinon "[DARK]traders" s'affiche
+            # littéralement à l'écran.
+            subtitle_timeline = [
+                (ts, te, re.sub(r'\[DARK\]', '', txt, flags=re.IGNORECASE).strip())
+                for ts, te, txt in subtitle_timeline
+            ]
+
             _re_rep  = re.compile(r'\[REPEATER\s*:\s*([^\]]+)\]', re.IGNORECASE)
             _re_icon = re.compile(r'\[ICON\s*:\s*([^\]]+)\]',     re.IGNORECASE)
 
@@ -2077,6 +2100,23 @@ class NexusBrain:
             else:
                 video_track = video_track.set_audio(audio_clip).set_duration(total_duration)
 
+            # ── P1C FIX 2026-04-27: Éviter que la CTA recouvre le dernier ICON/REPEATER ──
+            # La CTA démarre à ~90.9% de la durée. Si le dernier ICON ou REPEATER
+            # se termine après ce seuil, décaler la CTA start à la fin de la scène + 0.3s.
+            _special_ends = (
+                [te for _, te, _ in icon_schedule] +
+                [te for _, te, _, _ in repeater_schedule]
+            )
+            _last_special_end = max(_special_ends) if _special_ends else 0.0
+            _natural_cta_start = total_duration * (40.033 / 44.033)
+            cta_start_override = None
+            if _last_special_end > _natural_cta_start:
+                cta_start_override = round(_last_special_end + 0.3, 3)
+                jlog("info", msg=(
+                    f"[P1C] CTA décalée : {_natural_cta_start:.2f}s → {cta_start_override:.2f}s "
+                    f"(dernier ICON/REPEATER à {_last_special_end:.2f}s)"
+                ))
+
             # ── SubtitleBurner ────────────────────────────────────────────
             final_clip = self.subtitle_burner.burn_subtitles(
                 video_clip          = video_track,
@@ -2085,6 +2125,7 @@ class NexusBrain:
                 dark_scene_intervals= dark_scene_intervals,
                 repeater_schedule   = repeater_schedule,
                 icon_schedule       = icon_schedule,
+                cta_start           = cta_start_override,
             )
 
             # ── Export final ──────────────────────────────────────────────
