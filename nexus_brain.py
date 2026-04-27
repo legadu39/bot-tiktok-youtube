@@ -1833,11 +1833,15 @@ class NexusBrain:
             cursor_b = 0.0
             for i, d in enumerate(durations):
                 if i in broll_indices:
-                    img_path = scenes[i].get("_broll_image_path", "")
-                    if img_path and os.path.exists(img_path):
-                        # NEXUS_MASTER_V38: Filtre ultra-minimal — 0.3s suffit
-                        if d >= 0.3:
-                            broll_schedule.append((cursor_b, cursor_b + d, img_path))
+                    # FIX 2026-04-27: ICON/REPEATER/PRICE ont un rendu dédié (_special_frame).
+                    # Les inclure dans broll_schedule compositerait une carte Pexels par-dessus
+                    # leur rendu propre, masquant l'icône ou le tilé.
+                    vtype_b = scenes[i].get("visual_type", "text")
+                    if vtype_b not in ("icon", "repeater", "price"):
+                        img_path = scenes[i].get("_broll_image_path", "")
+                        if img_path and os.path.exists(img_path):
+                            if d >= 0.3:
+                                broll_schedule.append((cursor_b, cursor_b + d, img_path))
                 cursor_b += d
 
             jlog("info", msg=(
@@ -2011,6 +2015,34 @@ class NexusBrain:
                 f"Anticipation audio {AUDIO_ANTICIPATION_OFFSET*1000:.0f}ms "
                 f"sur {len(subtitle_timeline)} mots."
             ))
+
+            # ── Script integrity check ────────────────────────────────────
+            # Compare les mots du script source avec la subtitle_timeline humanisée.
+            _script_words = []
+            for s in scenes:
+                clean = re.sub(r'\[.*?\]', '', s.get("tts_text", s.get("text", ""))).strip()
+                _script_words.extend(w.lower().strip(".,!?;:'\"") for w in clean.split() if w)
+
+            _rendered_words = [
+                w.lower().strip(".,!?;:'\"")
+                for _, _, w in subtitle_timeline
+                if re.sub(r'\[.*?\]', '', w).strip()
+            ]
+            _rendered_clean = [re.sub(r'\[.*?\]', '', w).strip().lower().strip(".,!?;:'\"")
+                               for _, _, w in subtitle_timeline
+                               if re.sub(r'\[.*?\]', '', w).strip()]
+
+            _missing = [w for w in _script_words if w not in set(_rendered_clean)]
+            if not _missing:
+                jlog("success", msg=(
+                    f"[SCRIPT CHECK] OK — {len(_script_words)} mots script, "
+                    f"{len(_rendered_clean)} tokens rendus"
+                ))
+            else:
+                jlog("warning", msg=(
+                    f"[SCRIPT CHECK] ECART — {len(_missing)}/{len(_script_words)} mots "
+                    f"manquants: {_missing[:10]}"
+                ))
 
             # ── SFX ───────────────────────────────────────────────────────
             sfx_cursor = 0.0
