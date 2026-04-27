@@ -2020,7 +2020,7 @@ class NexusBrain:
             # FIX 2026-04-27: exclure les scènes visuelles pures (icon/repeater/price)
             # dont les mots sont supprimés intentionnellement à l'écran, et splitter
             # les groupes multi-mots rendus ("le meilleur" → ["le", "meilleur"]).
-            _SUPPRESSED_VTYPES = {"icon", "repeater", "price"}
+            _SUPPRESSED_VTYPES = {"icon", "repeater", "price", "broll"}
             _script_words = []
             for s in scenes:
                 if s.get("visual_type", "text") in _SUPPRESSED_VTYPES:
