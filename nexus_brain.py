@@ -2017,26 +2017,29 @@ class NexusBrain:
             ))
 
             # ── Script integrity check ────────────────────────────────────
-            # Compare les mots du script source avec la subtitle_timeline humanisée.
+            # FIX 2026-04-27: exclure les scènes visuelles pures (icon/repeater/price)
+            # dont les mots sont supprimés intentionnellement à l'écran, et splitter
+            # les groupes multi-mots rendus ("le meilleur" → ["le", "meilleur"]).
+            _SUPPRESSED_VTYPES = {"icon", "repeater", "price"}
             _script_words = []
             for s in scenes:
+                if s.get("visual_type", "text") in _SUPPRESSED_VTYPES:
+                    continue
                 clean = re.sub(r'\[.*?\]', '', s.get("tts_text", s.get("text", ""))).strip()
                 _script_words.extend(w.lower().strip(".,!?;:'\"") for w in clean.split() if w)
 
-            _rendered_words = [
-                w.lower().strip(".,!?;:'\"")
-                for _, _, w in subtitle_timeline
-                if re.sub(r'\[.*?\]', '', w).strip()
-            ]
-            _rendered_clean = [re.sub(r'\[.*?\]', '', w).strip().lower().strip(".,!?;:'\"")
-                               for _, _, w in subtitle_timeline
-                               if re.sub(r'\[.*?\]', '', w).strip()]
+            # Splitter chaque groupe rendu en tokens individuels avant comparaison
+            _rendered_tokens: set = set()
+            for _, _, entry in subtitle_timeline:
+                clean_entry = re.sub(r'\[.*?\]', '', entry).strip()
+                for tok in clean_entry.split():
+                    _rendered_tokens.add(tok.lower().strip(".,!?;:'\""))
 
-            _missing = [w for w in _script_words if w not in set(_rendered_clean)]
+            _missing = [w for w in _script_words if w not in _rendered_tokens]
             if not _missing:
                 jlog("success", msg=(
-                    f"[SCRIPT CHECK] OK — {len(_script_words)} mots script, "
-                    f"{len(_rendered_clean)} tokens rendus"
+                    f"[SCRIPT CHECK] OK — {len(_script_words)} mots attendus, "
+                    f"{len(_rendered_tokens)} tokens rendus distincts"
                 ))
             else:
                 jlog("warning", msg=(
