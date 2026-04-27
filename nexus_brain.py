@@ -974,6 +974,12 @@ class NexusBrain:
             tags_match  = re.search(r"TAGS\s*:\s*(.*)", text, re.IGNORECASE)
             tags_list   = [t.strip(" \t\n\r\\\"'*") for t in tags_match.group(1).split(",")] if tags_match else []
 
+            # FIX 2026-04-27: Tronquer au dernier "=== DEBUT SCRIPT ===" pour ne parser
+            # que le script réel de Gemini et ignorer les scènes d'exemple du prompt.
+            _DEBUT_MARKER = "=== DEBUT SCRIPT ==="
+            if _DEBUT_MARKER in text:
+                text = text[text.rfind(_DEBUT_MARKER):]
+
             scenes       = []
             scene_blocks = re.split(r"SCENE\s*\d+", text, flags=re.IGNORECASE)
 
