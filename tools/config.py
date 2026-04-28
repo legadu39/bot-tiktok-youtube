@@ -96,8 +96,7 @@ KEYWORDS_ACCENT = {
     "siret","urssaf","fisc","régime","structure","financement",
     "propfirm","évaluation","compte","levier","investissement","actif",
     "passif","compte-rendu","financer",
-    "comptable","bugue","bug","comprend","comprendre","conseil","expert",
-    "vérité","réalité","vraie","récupérer",
+    "comptable","bugue","bug",
     # ── NEXUS_MASTER_V38: Tech / Produit / iPhone ref ─────────────────────
     "écran","caméra","batterie","puce","processeur","design",
     "innovation","lancement","premium","tarif","prix","offre",

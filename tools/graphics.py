@@ -735,14 +735,29 @@ def render_broll_card(
     s_blur  = shadow_blur    if shadow_blur    is not None else BROLL_SHADOW_BLUR
     s_opa   = shadow_opacity if shadow_opacity is not None else BROLL_SHADOW_OPACITY
 
+    # P1A FIX 2026-04-28: Dimensions fixes calées sur la référence (ratio 220/300 = 0.733).
+    # Cover mode : l'image est recadrée pour remplir card_w × card_h (pas de bandes).
+    # Fond noir #000000 composite sous l'image → style carte référence.
+    card_h = int(card_w * 0.733)
+
     try:
         img_pil = Image.open(image_path).convert("RGBA")
     except Exception:
-        img_pil = Image.new("RGBA", (card_w, int(card_w * 0.55)), (30, 30, 30, 255))
+        img_pil = Image.new("RGBA", (card_w, card_h), (30, 30, 30, 255))
 
-    ratio   = card_w / max(img_pil.width, 1)
-    card_h  = int(img_pil.height * ratio)
-    img_pil = img_pil.resize((card_w, card_h), Image.LANCZOS)
+    # Scale en mode cover (remplissage complet, crop centré)
+    scale   = max(card_w / max(img_pil.width, 1), card_h / max(img_pil.height, 1))
+    new_w   = int(img_pil.width  * scale)
+    new_h   = int(img_pil.height * scale)
+    img_pil = img_pil.resize((new_w, new_h), Image.LANCZOS)
+    crop_x  = (new_w - card_w) // 2
+    crop_y  = (new_h - card_h) // 2
+    img_pil = img_pil.crop((crop_x, crop_y, crop_x + card_w, crop_y + card_h))
+
+    # Fond noir comme dans la référence
+    card_bg = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 255))
+    card_bg.paste(img_pil, (0, 0), mask=img_pil.split()[3])
+    img_pil = card_bg
 
     mask = Image.new("L", (card_w, card_h), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
@@ -1003,14 +1018,13 @@ def render_repeater_scene(
             except Exception:
                 draw.text((col_x, row_y), "■", font=tile_font, fill=tile_color)
 
-    # ── Mot principal en blanc ExtraBold centré ───────────────────────────
+    # ── Mot principal en blanc Regular centré ─────────────────────────────
+    # P1B FIX 2026-04-28: Regular weight ~36px (référence mesurée vs ExtraBold 90px pipeline).
     clean = re.sub(r'\[.*?\]', '', word).strip() or word.strip()
-    word_font, _, tw, th = auto_size_font(clean, "extrabold", 90, canvas_w - 80)
+    word_font, _, tw, th = auto_size_font(clean, "regular", 36, canvas_w - 80)
     tx = (canvas_w - tw) // 2
     ty = int(canvas_h * 0.499) - th // 2
-    # Ombre légère
-    draw.text((tx + 3, ty + 4), clean, font=word_font, fill=(80, 80, 80))
-    # Texte blanc
+    # Texte blanc (sans ombre pour coller à la référence)
     draw.text((tx, ty), clean, font=word_font, fill=(255, 255, 255))
 
     return np.array(bg)
@@ -1064,7 +1078,8 @@ def render_icon_scene(
     # Résoudre le caractère
     icon_char = _ICON_MAP.get(icon_param.lower().strip(), icon_param[:4])
 
-    icon_size = max(80, int(canvas_w * 0.15))   # ~162px à 1080px
+    # P1C FIX 2026-04-28: 0.17 (~183px) vs référence ~182px (0.169×1080).
+    icon_size = max(80, int(canvas_w * 0.17))
     icon_font = None
     for fp in [
         "C:/Windows/Fonts/seguiemj.ttf",
@@ -1080,15 +1095,16 @@ def render_icon_scene(
             continue
 
     cx = canvas_w // 2
-    cy = int(canvas_h * 0.499)
+    cy = canvas_h // 2   # P2A FIX 2026-04-28: 50% exact (était 0.499 sans compensation bbox)
 
     if icon_font is not None:
         try:
             bbox = draw.textbbox((0, 0), icon_char, font=icon_font)
-            tw   = bbox[2] - bbox[0]
-            th   = bbox[3] - bbox[1]
-            draw.text((cx - tw // 2, cy - th // 2), icon_char,
-                      font=icon_font, fill=(10, 10, 10, 255))
+            # P2A: centrage visuel exact via offset bbox (compense l'espace ascendeur/descendeur)
+            draw.text(
+                (cx - (bbox[0] + bbox[2]) // 2, cy - (bbox[1] + bbox[3]) // 2),
+                icon_char, font=icon_font, fill=(10, 10, 10, 255)
+            )
         except Exception:
             icon_font = None   # fallback disque
 
