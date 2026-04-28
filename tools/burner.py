@@ -643,10 +643,16 @@ class SubtitleBurner:
             print(f"  🌑 [DARK] scènes: {len(dark_scene_intervals)} interval(s) injecté(s)")
 
         # ── Étape 5: CTA Card dans TimelineEngine (z=15) ─────────────────
+        # _cta_suppress_from : timestamp à partir duquel le texte kinétique est masqué.
+        # = début VISUEL de la CTA card (cta_start ou dernière inversion).
+        # La suppression commence dès que la carte apparaît, pas seulement quand
+        # l'inversion bg est appliquée (qui peut démarrer ~1.5s plus tard).
+        _cta_suppress_from: float = float("inf")
         if len(inv_intervals) >= 2:
             cta_t0, cta_t1 = inv_intervals[-1]  # Dernière inversion = CTA
             if cta_start is not None:
                 cta_t0 = cta_start
+            _cta_suppress_from = cta_t0  # capturé pour la closure make_frame
             if cta_t0 < duration:
                 cta_t1_capped = min(cta_t1, duration)
                 self._build_cta_timelineobject(cta_t0, cta_t1_capped, engine, vid_w, vid_h)
@@ -733,7 +739,11 @@ class SubtitleBurner:
 
             # ÉTAPE B — Texte masqué pendant CTA, B-Roll, REPEATER et ICON
             _in_broll = any(t0 <= t < t1 for t0, t1 in _broll_intervals)
-            _suppress = (self._is_cta_window(t, _inv_intervals)
+            # FIX B2 2026-04-28 : suppression dès le DÉBUT VISUEL de la CTA card
+            # (_cta_suppress_from = cta_t0 ≈ 43.74s) et non plus seulement quand
+            # l'inversion bg démarre (~45.22s). Évite le texte kinétique visible
+            # pendant les ~1.5s d'écart entre CTA card et inversion.
+            _suppress = (t >= _cta_suppress_from
                          or _in_broll
                          or _special_frame is not None)
             if not _suppress:
