@@ -9,12 +9,17 @@ dependencies = [
   "aiohttp>=3.9.0",
   "psutil>=5.9.0",
   "pyyaml>=6.0",
-  "openai>=1.0.0",
   "moviepy>=1.0.3,<2.0",  # API 1.x REQUISE — moviepy.editor + .set_fps/.volumex/.subclip supprimés en 2.x
   "numpy>=1.24.0",
   "Pillow>=10.0.0",
   "requests>=2.31.0",
   "python-dotenv>=1.0.0"
+]
+
+[project.optional-dependencies]
+vision = [
+  # opencv-python : utilisé pour l'analyse de frames vidéo (non requis en prod standard)
+  "opencv-python>=4.8.0",
 ]
 
 [build-system]

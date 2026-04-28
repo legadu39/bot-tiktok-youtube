@@ -99,7 +99,7 @@ async def wait_and_click_semantic(
             await locator.wait_for(state="visible", timeout=timeout)
             await locator.scroll_into_view_if_needed()
             await locator.click()
-            jlog("nav_click", target=keyword, role=role, status="success")
+            jlog("nav_click", target=keyword, role=role, result="success")
             return True
 
         except Exception as e:
@@ -128,7 +128,7 @@ async def robust_fill(page: Page, selector: str, value: str, name: str = "field"
         await loc.click()
         await loc.fill("")
         await loc.fill(value)
-        jlog("input_fill", field=name, status="success")
+        jlog("input_fill", field=name, result="success")
     except Exception as e:
         jlog("input_fill_failed", field=name, error=str(e))
         # Stratégie de repli : frappe caractère par caractère
@@ -164,7 +164,7 @@ async def validate_session_health(page: Page) -> bool:
             # Vérification redirection login
             current_url = page.url
             if "google.com/signin" in current_url or "accounts.google.com" in current_url:
-                jlog("session_health", status="critical",
+                jlog("session_health_critical",
                      error="Redirigé vers la page de connexion", url=current_url)
                 return False
 
@@ -177,7 +177,7 @@ async def validate_session_health(page: Page) -> bool:
             for sel in sign_in_selectors:
                 try:
                     if await page.locator(sel).first.is_visible(timeout=1000):
-                        jlog("session_health", status="critical",
+                        jlog("session_health_critical",
                              error="Bouton Se connecter détecté — non connecté")
                         return False
                 except Exception:
@@ -193,17 +193,17 @@ async def validate_session_health(page: Page) -> bool:
             ]
             for block in blockers:
                 if block in body_text:
-                    jlog("session_health", status="blocked",
+                    jlog("session_health_blocked",
                          error=f"Contrainte compte détectée: {block}")
                     return False
         except Exception:
             pass  # Fail-open : on ne bloque pas sur une erreur de lecture
 
-        jlog("session_health", status="healthy")
+        jlog("session_health_ok")
         return True
 
     except Exception as e:
-        jlog("session_health", status="error", error=str(e))
+        jlog("session_health_error", error=str(e))
         return True  # Fail-open
 
 

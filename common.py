@@ -140,7 +140,7 @@ def jlog(event: str, **kwargs):
     
     # Filtrage de sécurité (basic)
     sanitized_kwargs = {}
-    SENSITIVE_KEYS = ["api_key", "password", "token", "secret", "gemini", "openai"]
+    SENSITIVE_KEYS = ["api_key", "password", "token", "secret", "gemini", "openai", "elevenlabs"]
     
     for k, v in kwargs.items():
         if any(s in k.lower() for s in SENSITIVE_KEYS):
@@ -237,35 +237,54 @@ class VideoValidator:
             return False, "Fichier introuvable"
 
         try:
-            cmd = [
-                "ffprobe", 
-                "-v", "error", 
-                "-show_entries", "format=duration", 
-                "-show_entries", "stream=width,height", 
-                "-of", "default=noprint_wrappers=1:nokey=1", 
+            # FIX C6 2026-04-16: deux appels ffprobe distincts pour éviter le mélange
+            # de streams. Sans -select_streams v:0, les dimensions du flux audio (0×0)
+            # peuvent apparaître en premier et corrompre l'extraction width/height/duration.
+            cmd_video = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "default=noprint_wrappers=1:nokey=1",
                 path
             ]
-            # Timeout ajouté pour éviter les blocages
-            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=10).decode().split()
-            values = [float(x) for x in output if x.replace('.', '', 1).isdigit()]
-            
-            if len(values) < 3:
-                return True, "Impossible d'analyser (FFprobe échoué), on tente quand même."
+            cmd_dur = [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path
+            ]
+            out_video = subprocess.check_output(cmd_video, stderr=subprocess.STDOUT, timeout=10).decode().split()
+            out_dur   = subprocess.check_output(cmd_dur,   stderr=subprocess.STDOUT, timeout=10).decode().split()
 
-            width, height, duration = values[0], values[1], values[2]
+            def _to_float(tokens):
+                return [float(x) for x in tokens if x.replace('.', '', 1).isdigit()]
+
+            dims = _to_float(out_video)
+            durs = _to_float(out_dur)
+
+            # FIX C6 2026-04-16: retourne False si les données sont inexploitables
+            # (auparavant retournait True, laissant passer des vidéos invalides).
+            if len(dims) < 2:
+                return False, "Impossible d'extraire les dimensions vidéo (FFprobe échoué)."
+            if len(durs) < 1:
+                return False, "Impossible d'extraire la durée (FFprobe échoué)."
+
+            width, height, duration = dims[0], dims[1], durs[0]
             rules = CONFIG.get('validation', {}).get(platform, {})
-            
+
             if width > height:
-                 return False, f"Format Paysage détecté ({int(width)}x{int(height)}). Requis: Vertical."
-            
+                return False, f"Format Paysage détecté ({int(width)}x{int(height)}). Requis: Vertical."
+
             max_dur = rules.get('max_duration', 60)
             if duration > max_dur + 2:
                 return False, f"Durée trop longue ({duration:.1f}s). Max: {max_dur}s."
-            
+
             return True, "OK"
 
         except subprocess.TimeoutExpired:
-             return True, "Timeout FFprobe (Validation ignorée)"
+            return True, "Timeout FFprobe (Validation ignorée)"
         except Exception:
             return True, "Bypass validation (Outil manquant)"
 

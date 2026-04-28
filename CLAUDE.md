@@ -3,6 +3,15 @@
 
 ---
 
+## Style de réponse
+
+- Réponses courtes et directes
+- Pas de formules de politesse
+- Pas de "Bien sûr !", "Je serais ravi", "Voici..."
+- Juste le résultat + la commande à lancer
+
+---
+
 ## 1. Stack technique confirmée
 
 | Composant | Outil réel | Notes |

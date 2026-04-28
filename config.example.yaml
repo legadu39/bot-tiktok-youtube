@@ -60,11 +60,26 @@ tools:
     headless: true
     upload_timeout: 120
     cookies_path: "cookies_yt.json"
+  # Chemins binaires optionnels — décommentez et adaptez si les outils
+  # ne sont pas détectés automatiquement dans le PATH système.
+  # imagemagick_binary: "C:/Program Files/ImageMagick-7.1.2-Q16-HDRI/magick.exe"
+  # ffmpeg_bin_path: "C:/ffmpeg/bin"
 
-# API Keys (Fallback & Services)
-# IMPORTANT : En production, privilégiez les variables d'environnement si possible.
+# API Keys
+# ─────────────────────────────────────────────────────────────────────────────
+# NE PAS mettre de vraies clés ici. Ce fichier est commité dans git.
+#
+# Les clés sont chargées exclusivement depuis le fichier .env (non commité).
+# Étapes de configuration :
+#   1. Copier .env.example → .env
+#   2. Remplir les valeurs dans .env
+#   3. Ne jamais commiter .env (déjà dans .gitignore)
+#
+# common.py appelle load_dotenv() au démarrage et injecte automatiquement
+# GEMINI_API_KEY, ELEVENLABS_API_KEY, AFFILIATE_LINK dans CONFIG["api_keys"].
+# Les valeurs ci-dessous ne sont utilisées qu'en dernier recours (fallback
+# si la variable d'env correspondante est absente).
 api_keys:
-  gemini: "VOTRE_CLE_GEMINI_ICI"
-  openai: "VOTRE_CLE_OPENAI_ICI"
-  elevenlabs: "VOTRE_CLE_ELEVENLABS_SI_BESOIN"
-  # affiliate_link: "https://votre-lien-affiliation.com"
+  gemini: ""
+  elevenlabs: ""
+  # affiliate_link: ""

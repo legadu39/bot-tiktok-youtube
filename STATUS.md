@@ -5,7 +5,7 @@
 |---------|--------|-------------|---------------|
 | **RACINE** | | | |
 | `nexus_brain.py` | ✅ complet | `tools/graphics.py`, `tools/burner.py`, `tools/tts_manager.py`, `tools/compositor.py`, `tools/animator.py`, `tools/timeline.py`, `common.py`, `prompts/templates.py`, ElevenLabs API, FFmpeg | FIX 2026-04-15 : scène 0 exclue des broll_indices. FIX 2026-04-16 : `_DARK_TRIGGER_WORDS` + `_inject_dark_tags()` → injection `[DARK]` sur 2 mots forts par script (run_da_mode + run_daemon). FIX 2026-04-17 : collecte `dark_scene_intervals` depuis la timeline scène AVANT humanisation (re.sub strippait les tags) → passage explicite à `burn_subtitles()` |
-| `nexus_arms.py` | ✅ complet | `tools/tt_uploader.py`, `tools/yt_uploader.py`, `common.py`, `HOLDING/pacer_state.json` | — |
+| `nexus_arms.py` | ✅ complet | `tools/tt_uploader.py`, `tools/yt_uploader.py`, `common.py`, `HOLDING/pacer_state.json` | FIX 2026-04-21 : upload TikTok via CDP Page.setInterceptFileChooserDialog + userGesture + DOM.setFileInputFiles(backendNodeId) — déclenche le vrai upload React |
 | `nexus_daemon.py` | ✅ complet | `nexus_brain.py`, `nexus_arms.py`, `common.py`, FFmpeg (pre-flight) | — |
 | `common.py` | ✅ complet | `config.yaml`, `pyproject.toml`, FFprobe | — |
 | `fallback.py` | 🔄 partiel | Aucune dépendance externe | Templates hardcodés minimalistes, pas de génération variée |
@@ -34,7 +34,7 @@
 | `tools/config.py` | ✅ complet | `common.py`, `config.yaml` | — (profils de police configurés) |
 | `tools/context.py` | 🔄 partiel | `tools/config.py` | Contenu minimal — wrapper de contexte |
 | `tools/vfx.py` | 🔄 partiel | PIL, numpy | Fonctions VFX supplémentaires non documentées |
-| `tools/tt_uploader.py` | ✅ complet | `tools/tt_dom.py`, `tools/tt_cdp.py`, `tools/tt_runner.py`, `tools/tt_constants.py`, `tools/tt_utils.py`, Playwright | — (fuzzy selector logic) |
+| `tools/tt_uploader.py` | ✅ complet | `tools/tt_dom.py`, `tools/tt_cdp.py`, `tools/tt_runner.py`, `tools/tt_constants.py`, `tools/tt_utils.py`, Playwright | FIX 2026-04-21 : tuple unpack _make_neutral_upload_copy, fuzzy score 20→10, max_wait_post 120→300s |
 | `tools/tt_dom.py` | ✅ complet | Playwright, `tools/tt_constants.py` | — (cache sélecteurs 7 jours) |
 | `tools/tt_cdp.py` | ✅ complet | websockets (SSL), Playwright | — ("Ghost Socket" Edition) |
 | `tools/tt_runner.py` | ✅ complet | `tools/tt_uploader.py`, `tools/tt_dom.py` | — |

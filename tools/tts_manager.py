@@ -218,12 +218,16 @@ class ElevenLabsTTS:
             "Content-Type": "application/json",
             "xi-api-key": self.api_key,
         }
+        # FIX C3 2026-04-16: le paramètre speed est maintenant transmis à l'API
+        # ElevenLabs (champ voice_settings.speed, supporté sur eleven_multilingual_v2).
+        # Avant ce fix, tts_speed: 1.1 dans le meta du script n'avait aucun effet.
         data = {
             "text": text,
             "model_id": self.model_id,
             "voice_settings": {
                 "stability": stability,
                 "similarity_boost": similarity_boost,
+                "speed": max(0.7, min(1.2, speed)),  # borne ElevenLabs : [0.7, 1.2]
             },
         }
 

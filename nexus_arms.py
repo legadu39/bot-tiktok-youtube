@@ -53,17 +53,77 @@ class PublicationPacer:
         self.MIN_INTERVAL_HOURS = 3     # Délai min entre 2 vidéos TikTok (en heures)
         self.START_HOUR = 8             # Heure de début (08:00)
         self.END_HOUR = 23              # Heure de fin (23:00)
+        self._burst_pause_until = 0     # Timestamp fin de pause anti-burst (0 = inactif)
         self._load_state()
 
+    # Clés obligatoires dans le fichier d'état
+    _REQUIRED_KEYS = {"daily_count", "last_upload_ts", "date"}
+    # Clé de protection anti-burst (reset répété)
+    _RESET_GUARD_KEY = "reset_count_today"
+
+    def _default_state(self) -> dict:
+        return {
+            "daily_count": 0,
+            "last_upload_ts": 0,
+            "date": "",
+            self._RESET_GUARD_KEY: 0,
+            "reset_guard_date": "",
+        }
+
     def _load_state(self):
-        if self.state_file.exists():
-            try:
-                with open(self.state_file, 'r') as f:
-                    self.state = json.load(f)
-            except:
-                self.state = {"daily_count": 0, "last_upload_ts": 0, "date": ""}
+        """
+        Charge l'état depuis le fichier JSON.
+        - Si absent ou JSON invalide → reset avec warning.
+        - Si clés manquantes → reset avec warning.
+        - Après tout reset → persiste immédiatement sur disque.
+        - Si >2 resets dans la même journée → pause 1h + alerte critique.
+        """
+        reset_reason = None
+
+        if not self.state_file.exists():
+            reset_reason = "fichier absent"
         else:
-            self.state = {"daily_count": 0, "last_upload_ts": 0, "date": ""}
+            try:
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                missing = self._REQUIRED_KEYS - set(loaded.keys())
+                if missing:
+                    reset_reason = f"clés manquantes : {missing}"
+                else:
+                    self.state = loaded
+                    # Assure la présence des clés du guard même sur un état ancien
+                    self.state.setdefault(self._RESET_GUARD_KEY, 0)
+                    self.state.setdefault("reset_guard_date", "")
+                    return
+            except (json.JSONDecodeError, ValueError) as exc:
+                reset_reason = f"JSON corrompu ({exc})"
+            except Exception as exc:
+                reset_reason = f"erreur lecture ({exc})"
+
+        # ── Reset ──────────────────────────────────────────────────────────
+        jlog("warning", msg=f"Pacer: reset état — {reset_reason}. Reprise à zéro.")
+        self.state = self._default_state()
+
+        # Guard anti-burst : incrémente le compteur de resets du jour
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self.state.get("reset_guard_date") != today:
+            self.state[self._RESET_GUARD_KEY] = 0
+            self.state["reset_guard_date"] = today
+
+        self.state[self._RESET_GUARD_KEY] += 1
+        reset_count = self.state[self._RESET_GUARD_KEY]
+
+        # Persiste immédiatement pour que le prochain démarrage trouve un fichier valide
+        self._save_state()
+
+        if reset_count > 2:
+            jlog("critical", msg=(
+                f"Pacer: {reset_count} resets aujourd'hui ({today}). "
+                "Possible boucle de crash — uploads suspendus 1h."
+            ))
+            self._burst_pause_until = time.time() + 3600
+        else:
+            self._burst_pause_until = 0
 
     def _save_state(self):
         try:
@@ -85,6 +145,11 @@ class PublicationPacer:
         Décide si on peut injecter une NOUVELLE vidéo dans le pipeline.
         Les vidéos prioritaires (Manuelles) bypassent certaines règles.
         """
+        # Guard anti-burst : bloque si trop de resets détectés aujourd'hui
+        if self._burst_pause_until and time.time() < self._burst_pause_until:
+            wait_min = int((self._burst_pause_until - time.time()) / 60)
+            return False, f"Pause anti-burst active (encore {wait_min} min)"
+
         self._reset_quota_if_needed()
         now = time.time()
         current_hour = datetime.now().hour
@@ -395,9 +460,15 @@ class NexusArms:
                 if time.time() < release_time:
                     continue
                 
-                video_path = Path(meta.get("video_path"))
+                # FIX C4 2026-04-16: Path(None) lève TypeError → boucle infinie en HOLDING
+                video_path_str = meta.get("video_path")
+                if not video_path_str:
+                    jlog("warning", msg=f"video_path manquant dans {json_path.name} — déplacé en FAILED.")
+                    await move_to_failed(json_path, reason="MissingVideoPath")
+                    continue
+                video_path = Path(video_path_str)
                 content = data.get("content", {})
-                
+
                 if not video_path.exists():
                      await move_to_failed(json_path, reason="VideoLostInHolding")
                      continue

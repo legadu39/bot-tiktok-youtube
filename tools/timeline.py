@@ -56,6 +56,13 @@ class TimelineObject:
     effects:   List[EffectBase]        = field(default_factory=list)
     tag:       str                     = ""
 
+    def __post_init__(self):
+        if self.t_end <= self.t_start:
+            raise ValueError(
+                f"t_end ({self.t_end}) <= t_start ({self.t_start}) : "
+                "durée nulle ou négative invalide (objet jamais actif)."
+            )
+
     def is_active(self, t: float) -> bool:
         return self.t_start <= t < self.t_end   # NOTE: < t_end = hard cut exact
 

@@ -64,9 +64,13 @@ class SpringPhysics:
     """
 
     def __init__(self, stiffness: float = 900.0, damping: float = 30.0):
+        if stiffness <= 0:
+            raise ValueError(f"stiffness doit être strictement positif, reçu : {stiffness}")
+        if damping < 0:
+            raise ValueError(f"damping doit être positif ou nul, reçu : {damping}")
         self.k      = stiffness
         self.c      = damping
-        self.omega0 = math.sqrt(max(stiffness, 1e-6))
+        self.omega0 = math.sqrt(stiffness)
         self.zeta   = damping / (2.0 * self.omega0)
         self._mode  = self._classify()
 

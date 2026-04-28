@@ -746,12 +746,24 @@ async def main() -> int:
     ap.add_argument("--debug-selectors", action="store_true")
     ap.add_argument("--upload-selector", type=str, default=None)
     ap.add_argument("--model", type=str, default="gemini-1.5-flash")
-    ap.add_argument("--screenshot-on-fail", action="store_true") 
+    ap.add_argument("--screenshot-on-fail", action="store_true")
     ap.add_argument("--heartbeat-timeout", type=float, default=None)
     ap.add_argument("--generation-timeout", type=float, default=None)
     ap.add_argument("--prompt-2", type=str, default=None)
-    
+    # FIX C2+DA2 2026-04-16: permet à NexusBrain de rediriger la sortie vers
+    # BUFFER/cli/ au lieu de BUFFER/, évitant la race condition avec nexus_arms.py.
+    ap.add_argument("--cli-buffer-dir", type=str, default=None,
+                    help="Répertoire de sortie pour save_to_nexus_buffer (override buffer_folder config).")
+
     args = ap.parse_args()
+
+    # FIX C2+DA2 2026-04-16: override du buffer_folder si --cli-buffer-dir est fourni
+    if args.cli_buffer_dir:
+        cli_buf = Path(args.cli_buffer_dir)
+        cli_buf.mkdir(parents=True, exist_ok=True)
+        if "directories" not in NEXUS_CONFIG:
+            NEXUS_CONFIG["directories"] = {}
+        NEXUS_CONFIG["directories"]["buffer_folder"] = cli_buf
     
     if IMPORT_ERROR:
         print(json.dumps({"evt": "fatal_error", "error": IMPORT_ERROR}), file=sys.stderr)
