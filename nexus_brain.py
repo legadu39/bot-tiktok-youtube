@@ -2117,6 +2117,21 @@ class NexusBrain:
                     f"(dernier ICON/REPEATER à {_last_special_end:.2f}s)"
                 ))
 
+            # P0 FIX 2026-04-28: Durée minimale CTA 6.0s — évite end screen trop court.
+            # Prend le minimum entre la CTA calculée et (total_duration - 6s).
+            _MIN_CTA_DURATION = 6.0
+            _effective_cta = cta_start_override if cta_start_override is not None else _natural_cta_start
+            if total_duration < _MIN_CTA_DURATION:
+                cta_start_override = 0.0
+            else:
+                _min_cta_start = total_duration - _MIN_CTA_DURATION
+                if _effective_cta > _min_cta_start:
+                    cta_start_override = round(_min_cta_start, 3)
+                    jlog("info", msg=(
+                        f"[P0] CTA min 6s : {_effective_cta:.2f}s → {cta_start_override:.2f}s "
+                        f"(end screen = {total_duration - cta_start_override:.2f}s)"
+                    ))
+
             # ── SubtitleBurner ────────────────────────────────────────────
             final_clip = self.subtitle_burner.burn_subtitles(
                 video_clip          = video_track,
