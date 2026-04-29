@@ -1987,11 +1987,13 @@ class NexusBrain:
                 for ts, te, txt in subtitle_timeline
             ]
 
-            _re_rep  = re.compile(r'\[REPEATER\s*:\s*([^\]]+)\]', re.IGNORECASE)
-            _re_icon = re.compile(r'\[ICON\s*:\s*([^\]]+)\]',     re.IGNORECASE)
+            _re_rep   = re.compile(r'\[REPEATER\s*:\s*([^\]]+)\]', re.IGNORECASE)
+            _re_icon  = re.compile(r'\[ICON\s*:\s*([^\]]+)\]',     re.IGNORECASE)
+            _re_price = re.compile(r'\[PRICE\s*:\s*([^\]]+)\]',    re.IGNORECASE)
 
             repeater_schedule: List[Tuple[float, float, str, str]] = []
             icon_schedule:     List[Tuple[float, float, str]]      = []
+            price_schedule:    List[Tuple[float, float, str]]      = []
 
             for ts, te, text in subtitle_timeline:
                 m_rep = _re_rep.search(text)
@@ -2005,10 +2007,17 @@ class NexusBrain:
                     icon_name = m_icon.group(1).strip().lower()
                     icon_schedule.append((round(ts, 3), round(te, 3), icon_name))
 
+                m_price = _re_price.search(text)
+                if m_price:
+                    price_param = m_price.group(1).strip()
+                    price_schedule.append((round(ts, 3), round(te, 3), price_param))
+
             if repeater_schedule:
                 jlog("info", msg=f"[REPEATER] {len(repeater_schedule)} scène(s) détectée(s)")
             if icon_schedule:
                 jlog("info", msg=f"[ICON] {len(icon_schedule)} scène(s) détectée(s)")
+            if price_schedule:
+                jlog("info", msg=f"[PRICE] {len(price_schedule)} scène(s) détectée(s)")
 
             is_tts_test_mode = getattr(self.tts, "test_mode", False)
 
@@ -2105,7 +2114,8 @@ class NexusBrain:
             # se termine après ce seuil, décaler la CTA start à la fin de la scène + 0.3s.
             _special_ends = (
                 [te for _, te, _ in icon_schedule] +
-                [te for _, te, _, _ in repeater_schedule]
+                [te for _, te, _, _ in repeater_schedule] +
+                [te for _, te, _ in price_schedule]
             )
             _last_special_end = max(_special_ends) if _special_ends else 0.0
             _natural_cta_start = total_duration * (40.033 / 44.033)
@@ -2140,6 +2150,7 @@ class NexusBrain:
                 dark_scene_intervals= dark_scene_intervals,
                 repeater_schedule   = repeater_schedule,
                 icon_schedule       = icon_schedule,
+                price_schedule      = price_schedule,
                 cta_start           = cta_start_override,
             )
 

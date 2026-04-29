@@ -48,6 +48,11 @@ from .config import (
     CTA_SEARCH_HEIGHT_RATIO, CTA_TIKTOK_HANDLE,
     FS_BASE, FS_MIN,
 )
+try:
+    from .config import BROLL_CARD_HEIGHT_RATIO, BROLL_CARD_RADIUS_PX
+except ImportError:
+    BROLL_CARD_HEIGHT_RATIO = 0.733
+    BROLL_CARD_RADIUS_PX    = 39
 
 try:
     from .config import CTA_TIKTOK_TEXT_Y_RATIO
@@ -581,136 +586,16 @@ def generate_procedural_broll_card(
     scene_index:  int  = 0,
     is_hook:      bool = False,
 ) -> str:
-    """
-    MASTER_NEXUS_V36: B-Roll procédural premium — image JPEG plate sans chrome.
-
-    Architecture V36 vs V35:
-        V35: image plate basique (dégradé vertical + accent line + texte)
-        V36: sélection de style par hash sémantique + gradient diagonal +
-             grid fantôme (selon style) + bruit de texture anti-banding +
-             typography compensée via find_font_compensated()
-
-    RÈGLE INVARIANTE: ce fichier produit une image PLATE (sans shadow, sans radius).
-    render_broll_card() (BLOC 5) applique le chrome (shadow + border-radius) une seule fois.
-
-    Sélection du style:
-        - hook (i=0)       → dark_hero (style 0)
-        - [PAUSE]          → light_clean (style 3) [ne devrait pas arriver]
-        - mots négatifs    → charcoal (style 4)
-        - chiffres/stats   → violet_stat (style 1)
-        - mots accent      → teal_accent (style 2)
-        - autres           → hash(f"{index}:{text[:16]}") % 5
-    """
+    """FIX 3 2026-04-29: Fallback procédural → rectangle noir #111111 propre."""
     card_w = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
-    card_h = int(card_w * 0.55)
-
-    # ── Extraction et nettoyage du texte ─────────────────────────────────
-    # FIX 2026-04-21: strip aussi les tags visuels [BROLL:...], [ICON:...],
-    # [PRICE:...], [REPEATER:...] qui n'étaient pas couverts avant → texte brut
-    # de tag affiché sur la carte (ex: "[BROLL:trading" en display).
-    clean   = re.sub(r'\[(?:BOLD|LIGHT|BADGE|PAUSE|BROLL|ICON|PRICE|REPEATER)\s*:?[^\]]*\]', '', scene_text, flags=re.IGNORECASE).strip()
-    words   = [w for w in clean.split() if re.sub(r'[^\w]', '', w)]
-    display = ' '.join(words[:3]) if words else "—"
-
-    # ── Sélection du style sémantique ────────────────────────────────────
-    words_lower = [w.lower().rstrip('.,!?') for w in words]
-    has_number  = any(re.search(r'[\d%€$£]', w) for w in words)
-    has_accent  = any(w in _BROLL_ACCENT_WORDS for w in words_lower)
-    has_negative = any(w in _BROLL_NEGATIVE_WORDS for w in words_lower)
-
-    if is_hook or scene_index == 0:
-        style = _BROLL_STYLES_V36[0]   # dark_hero
-    elif "[PAUSE]" in scene_text.upper():
-        style = _BROLL_STYLES_V36[3]   # light_clean
-    elif has_negative:
-        style = _BROLL_STYLES_V36[4]   # charcoal
-    elif has_number:
-        style = _BROLL_STYLES_V36[1]   # violet_stat
-    elif has_accent:
-        style = _BROLL_STYLES_V36[2]   # teal_accent
-    else:
-        # Hash déterministe pour variation organique non-répétitive
-        seed    = int(hashlib.md5(f"{scene_index}:{scene_text[:16]}".encode()).hexdigest()[:4], 16)
-        style   = _BROLL_STYLES_V36[seed % len(_BROLL_STYLES_V36)]
-
-    style_name, bg_top, bg_bottom, text_col, accent_color, has_grid = style
-
-    # ── Construction de l'image JPEG plate ───────────────────────────────
-    card = Image.new("RGB", (card_w, card_h), bg_bottom)
-    draw = ImageDraw.Draw(card)
-
-    # Gradient diagonal (non-linéaire via sinus) pour profondeur visuelle
-    for y in range(card_h):
-        t = y / max(card_h - 1, 1)
-        p = math.sin(t * math.pi) * 0.7    # Sinus 0→peak→0 pour gradient doux
-        r = int(bg_top[0] + (bg_bottom[0] - bg_top[0]) * t)
-        g = int(bg_top[1] + (bg_bottom[1] - bg_top[1]) * t)
-        b = int(bg_top[2] + (bg_bottom[2] - bg_top[2]) * t)
-
-        # Injection couleur accent au milieu du gradient
-        r = int(r + (accent_color[0] - r) * p * 0.12)
-        g = int(g + (accent_color[1] - g) * p * 0.12)
-        b = int(b + (accent_color[2] - b) * p * 0.12)
-        r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
-        draw.line([(0, y), (card_w - 1, y)], fill=(r, g, b))
-
-    # Grid fantôme (styles light/stat uniquement)
-    if has_grid:
-        is_dark = bg_top[0] < 128
-        grid_alpha = 12 if not is_dark else 22
-        n_cols, n_rows = 6, 4
-        for ci in range(n_cols):
-            x = (card_w * ci) // n_cols
-            draw.line([(x, 0), (x, card_h)], fill=(*accent_color, grid_alpha), width=1)
-        for ri in range(n_rows):
-            y = (card_h * ri) // n_rows
-            draw.line([(0, y), (card_w, y)], fill=(*accent_color, grid_alpha), width=1)
-
-    # Accent line top (barre dégradée TEAL→PINK, 5px)
-    for x in range(card_w):
-        t = x / max(card_w - 1, 1)
-        r_a = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
-        g_a = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
-        b_a = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
-        draw.line([(x, 0), (x, 4)], fill=(r_a, g_a, b_a))
-
-    # Accent line bottom (miroir atténué)
-    for x in range(card_w):
-        t = 1.0 - x / max(card_w - 1, 1)
-        r_a = int(ACCENT_GRADIENT_LEFT[0] + (ACCENT_GRADIENT_RIGHT[0] - ACCENT_GRADIENT_LEFT[0]) * t)
-        g_a = int(ACCENT_GRADIENT_LEFT[1] + (ACCENT_GRADIENT_RIGHT[1] - ACCENT_GRADIENT_LEFT[1]) * t)
-        b_a = int(ACCENT_GRADIENT_LEFT[2] + (ACCENT_GRADIENT_RIGHT[2] - ACCENT_GRADIENT_LEFT[2]) * t)
-        draw.line([(x, card_h - 2), (x, card_h - 1)], fill=(r_a, g_a, b_a))
-
-    # ── Texte centré avec AutoSizer + compensation cap-height ─────────────
-    font_size  = max(FS_MIN, int(card_h * 0.28))
-    safe_text_w = card_w - 48  # 24px padding chaque côté
-
-    font, comp_size, tw, th = auto_size_font(
-        display, "extrabold", font_size, safe_text_w, min_size=FS_MIN
-    )
-
-    tx = (card_w - tw) // 2
-    ty = (card_h - th) // 2
-
-    # Drop shadow texte (subtil, 3px offset)
-    shadow_alpha = 80 if bg_top[0] > 128 else 40
-    draw.text((tx + 2, ty + 3), display, font=font, fill=(0, 0, 0, shadow_alpha))
-
-    # Texte principal
-    draw.text((tx, ty), display, font=font, fill=text_col)
-
-    # ── Bruit de texture micro (anti-banding JPEG) ────────────────────────
-    card_arr     = np.array(card, dtype=np.int16)
-    noise        = np.random.randint(-3, 4, card_arr.shape, dtype=np.int16)
-    card_arr     = np.clip(card_arr + noise, 0, 255).astype(np.uint8)
-    card         = Image.fromarray(card_arr)
-
-    # ── Sauvegarde JPEG plate (sans shadow, sans radius) ──────────────────
+    card_h = int(card_w * BROLL_CARD_HEIGHT_RATIO)
+    card = Image.new("RGB", (card_w, card_h), (17, 17, 17))
     card.save(output_path, "JPEG", quality=95)
     return output_path
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 5 — B-Roll Card chrome
 # ══════════════════════════════════════════════════════════════════════════════
 # BLOC 5 — B-Roll Card chrome (conservé V31, inchangé V36)
 # Chrome (shadow + border-radius) appliqué UNE SEULE FOIS sur image plate.
@@ -722,39 +607,33 @@ def render_broll_card(
     corner_radius:  int   = None,
     shadow_blur:    int   = None,
     shadow_opacity: float = None,
+    progress:       float = 0.0,
 ) -> np.ndarray:
     """
-    ARCHITECTURE_MASTER_V31: B-Roll card — valeurs confirmées V31.
-
-    MASTER_NEXUS_V36: Seul point où shadow et border-radius sont appliqués.
-    generate_procedural_broll_card() produit une image plate → ce module
-    ajoute le chrome (shadow Gaussian 18px + border-radius 39px) une seule fois.
+    ARCHITECTURE_MASTER_V31: B-Roll card chrome (shadow + border-radius).
+    FIX 4 2026-04-29: progress [0.0, 1.0] applique un zoom Ken Burns 1.0→1.05.
     """
     card_w  = int(canvas_w * BROLL_CARD_WIDTH_RATIO)
-    radius  = corner_radius if corner_radius is not None else int(canvas_w * BROLL_CARD_RADIUS_RATIO)
+    card_h  = int(card_w * BROLL_CARD_HEIGHT_RATIO)
+    radius  = corner_radius if corner_radius is not None else BROLL_CARD_RADIUS_PX
     s_blur  = shadow_blur    if shadow_blur    is not None else BROLL_SHADOW_BLUR
     s_opa   = shadow_opacity if shadow_opacity is not None else BROLL_SHADOW_OPACITY
-
-    # P1A FIX 2026-04-28: Dimensions fixes calées sur la référence (ratio 220/300 = 0.733).
-    # Cover mode : l'image est recadrée pour remplir card_w × card_h (pas de bandes).
-    # Fond noir #000000 composite sous l'image → style carte référence.
-    card_h = int(card_w * 0.733)
 
     try:
         img_pil = Image.open(image_path).convert("RGBA")
     except Exception:
         img_pil = Image.new("RGBA", (card_w, card_h), (30, 30, 30, 255))
 
-    # Scale en mode cover (remplissage complet, crop centré)
-    scale   = max(card_w / max(img_pil.width, 1), card_h / max(img_pil.height, 1))
-    new_w   = int(img_pil.width  * scale)
-    new_h   = int(img_pil.height * scale)
+    # Ken Burns: zoom 1.0 → 1.05 selon progress
+    zoom  = 1.0 + 0.05 * float(progress)
+    scale = max(card_w / max(img_pil.width, 1), card_h / max(img_pil.height, 1)) * zoom
+    new_w = int(img_pil.width  * scale)
+    new_h = int(img_pil.height * scale)
     img_pil = img_pil.resize((new_w, new_h), Image.LANCZOS)
     crop_x  = (new_w - card_w) // 2
     crop_y  = (new_h - card_h) // 2
     img_pil = img_pil.crop((crop_x, crop_y, crop_x + card_w, crop_y + card_h))
 
-    # Fond noir comme dans la référence
     card_bg = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 255))
     card_bg.paste(img_pil, (0, 0), mask=img_pil.split()[3])
     img_pil = card_bg
@@ -781,6 +660,7 @@ def render_broll_card(
     shadow.paste(img_pil, (shadow_pad, shadow_pad), mask=img_pil.split()[3])
 
     return np.array(shadow)
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -963,6 +843,92 @@ def render_cta_card(
     return np.array(canvas)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOC 6B — PRICE scene (3 prix verticaux, gris #B8B8B8, Inter-Regular 52px)
+# FIX 1 2026-04-29: [PRICE:tag] → rendu visuel 3 lignes centré.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PRICE_EXAMPLES = {
+    "basic":     ("29$", "49$", "99$"),
+    "premium":   ("49$", "99$", "199$"),
+    "pro":       ("79$", "149$", "299$"),
+    "challenge": ("89$", "149$", "299$"),
+    "funded":    ("500$", "1000$", "2000$"),
+    "compte":    ("1K$", "5K$", "10K$"),
+    "prop":      ("5K$", "25K$", "100K$"),
+}
+_PRICE_COLOR = (184, 184, 184)   # #B8B8B8
+
+
+def render_price_scene(
+    price_param: str,
+    canvas_w:    int = 1080,
+    canvas_h:    int = 1920,
+) -> np.ndarray:
+    """
+    FIX 1 2026-04-29: Rend 3 montants en colonne verticale centrée.
+    price_param: clé de _PRICE_EXAMPLES (ex: "challenge") ou "A,B,C" littéral.
+    Style: fond blanc, gris #B8B8B8, Inter-Regular 52px, letter-spacing +8px.
+    """
+    bg   = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
+    draw = ImageDraw.Draw(bg)
+
+    # Résoudre les 3 prix
+    key = price_param.lower().strip()
+    if key in _PRICE_EXAMPLES:
+        prices = list(_PRICE_EXAMPLES[key])
+    else:
+        parts = [p.strip() for p in price_param.replace(";", ",").split(",")]
+        while len(parts) < 3:
+            parts.append(parts[-1] if parts else "—")
+        prices = parts[:3]
+
+    # Police Inter-Regular 52px (ou fallback)
+    target_size = 52
+    font = find_font("regular", target_size)
+
+    # Letter-spacing simulation: dessine caractère par caractère avec +8px gap
+    def draw_spaced(text, x0, y0, fill):
+        cx_pos = x0
+        for ch in text:
+            draw.text((cx_pos, y0), ch, font=font, fill=fill)
+            try:
+                bbox = draw.textbbox((0, 0), ch, font=font)
+                cx_pos += (bbox[2] - bbox[0]) + 8
+            except Exception:
+                cx_pos += target_size + 8
+
+    def text_spaced_width(text):
+        w = 0
+        for ch in text:
+            try:
+                bbox = draw.textbbox((0, 0), ch, font=font)
+                w += (bbox[2] - bbox[0]) + 8
+            except Exception:
+                w += target_size + 8
+        return max(0, w - 8)
+
+    def text_height(text):
+        try:
+            bbox = draw.textbbox((0, 0), text, font=font)
+            return bbox[3] - bbox[1]
+        except Exception:
+            return target_size
+
+    line_h = text_height(prices[0]) + 24   # 24px gap inter-ligne
+    total_h = line_h * 3 - 24
+    cy_start = canvas_h // 2 - total_h // 2
+
+    for i, price in enumerate(prices):
+        tw = text_spaced_width(price)
+        th = text_height(price)
+        x0 = (canvas_w - tw) // 2
+        y0 = cy_start + i * line_h
+        draw_spaced(price, x0, y0, _PRICE_COLOR + (255,))
+
+    return np.array(bg.convert("RGB"))
+
 # ══════════════════════════════════════════════════════════════════════════════
 # BLOC 7 — REPEATER scene (fond gris + grille tile + mot blanc centré)
 # Référence vidéo frame t=28s : fond #838383, emoji 🏢 tilé, "doublé" en blanc.
@@ -1065,51 +1031,93 @@ def render_icon_scene(
     canvas_h:   int = 1920,
 ) -> np.ndarray:
     """
-    Génère un frame plein écran ICON :
-        - Fond blanc pur
-        - Icône/emoji noir centré à 50% V, ~15% de la largeur (≈162px@1080)
-
-    `icon_param` est le nom normalisé (ex: "oeil", "feu") ou un emoji direct.
-    Si le rendu emoji échoue, dessine un disque noir de fallback.
+    FIX 2 2026-04-29: Icônes flat solid noir #000000, dessin PIL programmatique.
+    Référence: ~180px hauteur, centré 50%/50%, fond blanc, aucun emoji/font.
     """
     bg   = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
     draw = ImageDraw.Draw(bg)
+    cx   = canvas_w // 2
+    cy   = canvas_h // 2
+    s    = int(canvas_w * 0.167)   # ~180px @ 1080
 
-    # Résoudre le caractère
-    icon_char = _ICON_MAP.get(icon_param.lower().strip(), icon_param[:4])
+    name = icon_param.lower().strip()
 
-    # P1C FIX 2026-04-28: 0.17 (~183px) vs référence ~182px (0.169×1080).
-    icon_size = max(80, int(canvas_w * 0.17))
-    icon_font = None
-    for fp in [
-        "C:/Windows/Fonts/seguiemj.ttf",
-        "C:/Windows/Fonts/seguisym.ttf",
-        "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
-    ]:
-        try:
-            if os.path.exists(fp):
-                icon_font = ImageFont.truetype(fp, icon_size)
-                break
-        except Exception:
-            continue
+    if name in ("eye", "oeil", "voir"):
+        ew, eh = int(s * 0.85), int(s * 0.45)
+        draw.ellipse([cx-ew//2, cy-eh//2, cx+ew//2, cy+eh//2], fill=(0,0,0,255))
+        iw, ih = int(ew*0.48), int(eh*0.72)
+        draw.ellipse([cx-iw//2, cy-ih//2, cx+iw//2, cy+ih//2], fill=(255,255,255,255))
+        pw = int(iw*0.52)
+        draw.ellipse([cx-pw//2, cy-pw//2, cx+pw//2, cy+pw//2], fill=(0,0,0,255))
 
-    cx = canvas_w // 2
-    cy = canvas_h // 2   # P2A FIX 2026-04-28: 50% exact (était 0.499 sans compensation bbox)
+    elif name in ("warning", "alerte", "alert", "risque", "danger"):
+        pts = [(cx, cy-int(s*0.44)), (cx-int(s*0.44), cy+int(s*0.34)), (cx+int(s*0.44), cy+int(s*0.34))]
+        draw.polygon(pts, fill=(0,0,0,255))
+        bw = max(4, int(s*0.07))
+        draw.rectangle([cx-bw//2, cy-int(s*0.20), cx+bw//2, cy+int(s*0.08)], fill=(255,255,255,255))
+        dr = max(3, int(s*0.05))
+        yy = cy+int(s*0.16)
+        draw.ellipse([cx-dr, yy-dr, cx+dr, yy+dr], fill=(255,255,255,255))
 
-    if icon_font is not None:
-        try:
-            bbox = draw.textbbox((0, 0), icon_char, font=icon_font)
-            # P2A: centrage visuel exact via offset bbox (compense l'espace ascendeur/descendeur)
-            draw.text(
-                (cx - (bbox[0] + bbox[2]) // 2, cy - (bbox[1] + bbox[3]) // 2),
-                icon_char, font=icon_font, fill=(10, 10, 10, 255)
-            )
-        except Exception:
-            icon_font = None   # fallback disque
+    elif name in ("shield", "bouclier"):
+        sw, sh = int(s*0.65), int(s*0.75)
+        t, b = cy-sh//2, cy+sh//2
+        draw.pieslice([cx-sw//2, t-sw//4, cx+sw//2, t+sw//2], start=180, end=0, fill=(0,0,0,255))
+        pts = [(cx-sw//2, t), (cx+sw//2, t), (cx+sw//2, b-int(sh*0.35)), (cx, b), (cx-sw//2, b-int(sh*0.35))]
+        draw.polygon(pts, fill=(0,0,0,255))
 
-    if icon_font is None:
-        r = icon_size // 2
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(10, 10, 10, 255))
+    elif name in ("chart", "graphique", "graph", "courbe"):
+        bw = int(s*0.18); gap = int(s*0.07)
+        heights = [int(s*0.46), int(s*0.68), int(s*0.35)]
+        total = 3*bw + 2*gap
+        x0 = cx - total//2
+        base = cy + int(s*0.37)
+        for i, bh in enumerate(heights):
+            bx = x0 + i*(bw+gap)
+            draw.rectangle([bx, base-bh, bx+bw, base], fill=(0,0,0,255))
+
+    elif name in ("crown", "couronne", "roi", "king"):
+        bw, bh2 = int(s*0.72), int(s*0.28)
+        bot = cy+int(s*0.32); tb = bot-bh2
+        draw.rectangle([cx-bw//2, tb, cx+bw//2, bot], fill=(0,0,0,255))
+        for pts in [
+            [(cx-bw//2, tb), (cx-bw//2-int(s*0.06), cy-int(s*0.28)), (cx-bw//4, tb)],
+            [(cx-int(s*0.08), tb), (cx, cy-int(s*0.40)), (cx+int(s*0.08), tb)],
+            [(cx+bw//4, tb), (cx+bw//2+int(s*0.06), cy-int(s*0.28)), (cx+bw//2, tb)],
+        ]:
+            draw.polygon(pts, fill=(0,0,0,255))
+
+    elif name in ("rocket", "fusée", "fusee", "montee"):
+        bw = int(s*0.30)
+        nose = [(cx, cy-int(s*0.44)), (cx-bw//2, cy-int(s*0.08)), (cx+bw//2, cy-int(s*0.08))]
+        draw.polygon(nose, fill=(0,0,0,255))
+        draw.ellipse([cx-bw//2, cy-int(s*0.14), cx+bw//2, cy+int(s*0.28)], fill=(0,0,0,255))
+        draw.polygon([(cx-bw//2, cy+int(s*0.14)), (cx-bw//2-int(s*0.18), cy+int(s*0.38)), (cx-bw//2, cy+int(s*0.30))], fill=(0,0,0,255))
+        draw.polygon([(cx+bw//2, cy+int(s*0.14)), (cx+bw//2+int(s*0.18), cy+int(s*0.38)), (cx+bw//2, cy+int(s*0.30))], fill=(0,0,0,255))
+
+    elif name in ("money", "argent", "dollar", "euro", "cash"):
+        r = int(s*0.28); bw2 = max(5, int(s*0.08))
+        draw.rectangle([cx-bw2//2, cy-int(s*0.42), cx+bw2//2, cy+int(s*0.42)], fill=(0,0,0,255))
+        draw.pieslice([cx-r, cy-r-int(s*0.06), cx+r, cy-int(s*0.06)], start=315, end=135+360, fill=(0,0,0,255))
+        draw.pieslice([cx-r, cy+int(s*0.06), cx+r, cy+r+int(s*0.06)], start=135, end=315+360, fill=(0,0,0,255))
+        # Cut middle gap for S-curve
+        draw.rectangle([cx-r, cy-int(s*0.06)+1, cx+r, cy+int(s*0.06)-1], fill=(255,255,255,255))
+        draw.rectangle([cx-bw2//2, cy-int(s*0.42), cx+bw2//2, cy+int(s*0.42)], fill=(0,0,0,255))
+
+    elif name in ("lock", "cadenas", "securite", "secure"):
+        bw2 = int(s*0.52); bh3 = int(s*0.42); ar = int(s*0.22)
+        bot = cy+int(s*0.30); tb2 = bot-bh3
+        draw.rectangle([cx-bw2//2, tb2, cx+bw2//2, bot], fill=(0,0,0,255))
+        lw = max(5, int(s*0.09))
+        draw.arc([cx-ar, tb2-ar*2+int(s*0.08), cx+ar, tb2+int(s*0.08)], start=180, end=0, fill=(0,0,0,255), width=lw)
+        kr = max(4, int(bw2*0.13)); ky = tb2+bh3//3
+        draw.ellipse([cx-kr, ky-kr, cx+kr, ky+kr], fill=(255,255,255,255))
+        ksw = max(3, int(bw2*0.09))
+        draw.rectangle([cx-ksw//2, ky, cx+ksw//2, tb2+bh3*2//3], fill=(255,255,255,255))
+
+    else:
+        # Fallback: cercle plein
+        r = int(s*0.38)
+        draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(0,0,0,255))
 
     return np.array(bg.convert("RGB"))

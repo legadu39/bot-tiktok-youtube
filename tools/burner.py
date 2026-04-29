@@ -64,7 +64,7 @@ from .text_engine import (
 from .graphics import (
     render_text_solid, render_text_gradient, find_font, measure_text,
     render_broll_card, render_cta_card,
-    render_repeater_scene, render_icon_scene,
+    render_repeater_scene, render_icon_scene, render_price_scene,
 )
 from .timeline import TimelineObject, TimelineEngine
 
@@ -458,34 +458,60 @@ class SubtitleBurner:
         vid_w:      int,
         vid_h:      int,
     ) -> None:
+        # FIX 4 2026-04-29: Ken Burns — pré-rendu 2 frames (progress 0.0 et 1.0), blend par frame.
         try:
-            card_arr = render_broll_card(
-                image_path     = image_path,
-                canvas_w       = vid_w,
-                corner_radius  = None,
-                shadow_blur    = BROLL_SHADOW_BLUR,
-                shadow_opacity = BROLL_SHADOW_OPACITY,
+            card_arr_0 = render_broll_card(
+                image_path=image_path, canvas_w=vid_w,
+                shadow_blur=BROLL_SHADOW_BLUR, shadow_opacity=BROLL_SHADOW_OPACITY,
+                progress=0.0,
+            )
+            card_arr_1 = render_broll_card(
+                image_path=image_path, canvas_w=vid_w,
+                shadow_blur=BROLL_SHADOW_BLUR, shadow_opacity=BROLL_SHADOW_OPACITY,
+                progress=1.0,
             )
         except Exception as e:
             print(f"⚠️  B-Roll render failed: {e}")
             return
 
-        ch, cw  = card_arr.shape[:2]
+        ch, cw  = card_arr_0.shape[:2]
         cx_pos  = (vid_w - cw) // 2
         cy_base = int(vid_h * BROLL_CARD_CENTER_Y_RATIO)
         cy_pos  = cy_base - ch // 2
+        dur     = max(t_end - t_start, 1e-6)
+
+        def kb_render(t: float, _a=card_arr_0, _b=card_arr_1, _t0=t_start, _dur=dur) -> np.ndarray:
+            p = min(1.0, max(0.0, (t - _t0) / _dur))
+            if p <= 0.0:
+                return _a
+            if p >= 1.0:
+                return _b
+            return np.clip(_a * (1.0 - p) + _b * p, 0, 255).astype(np.uint8)
 
         sp = self._spring_factory()
-        engine.add(engine.make_spring_entry_object(
-            image_array = card_arr,
-            t_start     = t_start,
-            t_end       = t_end,
-            x           = cx_pos,
-            y           = cy_pos,
-            spring      = sp,
-            slide_px    = SPRING_SLIDE_PX,
-            z_index     = 5,
-            tag         = "broll_card",
+
+        def pos_fn(t: float, _sp=sp, _t0=t_start, _x=cx_pos, _y=cy_pos) -> Tuple[int, int]:
+            elapsed = t - _t0
+            if elapsed < 0:
+                return (_x, _y + 60)
+            alpha = _sp.clamped(elapsed)
+            y_off = int(SPRING_SLIDE_PX * max(0.0, 1.0 - alpha))
+            return (_x, _y + y_off)
+
+        def alpha_fn(t: float, _sp=sp, _t0=t_start) -> float:
+            elapsed = t - _t0
+            if elapsed < 0:
+                return 0.0
+            return _sp.clamped(elapsed)
+
+        engine.add(TimelineObject(
+            t_start   = t_start,
+            t_end     = t_end,
+            render_fn = kb_render,
+            pos_fn    = pos_fn,
+            alpha_fn  = alpha_fn,
+            z_index   = 5,
+            tag       = "broll_card",
         ))
 
     # ══════════════════════════════════════════════════════════════════════
@@ -550,6 +576,7 @@ class SubtitleBurner:
         dark_scene_intervals: List[Tuple[float, float]] = None,
         repeater_schedule:    List[Tuple[float, float, str, str]] = None,
         icon_schedule:        List[Tuple[float, float, str]] = None,
+        price_schedule:       List[Tuple[float, float, str]] = None,
     ):
         """
         NEXUS_MASTER_V38: Pipeline burn avec:
@@ -671,9 +698,10 @@ class SubtitleBurner:
             )
             print(f"  ✨ Sparkles ({SPARKLE_COUNT} particules, inv#1 uniquement)")
 
-        # ── Étape 8: Pré-rendu REPEATER et ICON (frames statiques par scène) ──
+        # ── Étape 8: Pré-rendu REPEATER, ICON et PRICE (frames statiques) ──
         repeater_schedule = repeater_schedule or []
         icon_schedule     = icon_schedule     or []
+        price_schedule    = price_schedule    or []
 
         _repeater_frames: dict = {}   # t_start → (rgb_array, t_end)
         for t0, t1, tile, word in repeater_schedule:
@@ -693,6 +721,15 @@ class SubtitleBurner:
             except Exception as e:
                 print(f"⚠️  ICON render failed: {e}")
 
+        _price_frames: dict = {}      # t_start → (rgb_array, t_end)
+        for t0, t1, price_param in price_schedule:
+            try:
+                arr = render_price_scene(price_param, vid_w, vid_h)
+                _price_frames[t0] = (arr, t1)
+                print(f"  💲 PRICE [{t0:.2f},{t1:.2f}s] param='{price_param}'")
+            except Exception as e:
+                print(f"⚠️  PRICE render failed: {e}")
+
         # ── Étape 9: make_frame ───────────────────────────────────────────
         # NEXUS_MASTER_V38: Capture inv_intervals in closure for dynamic use
         _inv_intervals  = inv_intervals
@@ -710,7 +747,7 @@ class SubtitleBurner:
                 base = (last_valid_frame if last_valid_frame is not None
                         else np.full((vid_h, vid_w, 3), 255, dtype=np.uint8))
 
-            # Détection frame spéciale REPEATER / ICON (priorité sur inversion)
+            # Détection frame spéciale REPEATER / ICON / PRICE (priorité sur inversion)
             _special_frame = None
             for t0, (arr, t1) in _repeater_frames.items():
                 if t0 <= t < t1:
@@ -718,6 +755,11 @@ class SubtitleBurner:
                     break
             if _special_frame is None:
                 for t0, (arr, t1) in _icon_frames.items():
+                    if t0 <= t < t1:
+                        _special_frame = arr
+                        break
+            if _special_frame is None:
+                for t0, (arr, t1) in _price_frames.items():
                     if t0 <= t < t1:
                         _special_frame = arr
                         break
