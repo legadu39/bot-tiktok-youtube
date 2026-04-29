@@ -1115,6 +1115,54 @@ def render_icon_scene(
         ksw = max(3, int(bw2*0.09))
         draw.rectangle([cx-ksw//2, ky, cx+ksw//2, tb2+bh3*2//3], fill=(255,255,255,255))
 
+    elif name in ("lightning", "eclair", "foudre", "flash", "bolt", "speed", "rapide", "vitesse"):
+        # Éclair: polygone en Z décalé
+        pts = [
+            (cx + int(s*0.08), cy - int(s*0.44)),
+            (cx - int(s*0.06), cy - int(s*0.04)),
+            (cx + int(s*0.14), cy - int(s*0.04)),
+            (cx - int(s*0.08), cy + int(s*0.44)),
+            (cx + int(s*0.06), cy + int(s*0.04)),
+            (cx - int(s*0.14), cy + int(s*0.04)),
+        ]
+        draw.polygon(pts, fill=(0,0,0,255))
+
+    elif name in ("star", "etoile", "top", "meilleur", "best", "premium"):
+        # Étoile 5 branches
+        import math as _m
+        pts = []
+        for i in range(10):
+            angle = _m.radians(-90 + i * 36)
+            r_i = int(s*0.42) if i % 2 == 0 else int(s*0.18)
+            pts.append((cx + int(r_i * _m.cos(angle)), cy + int(r_i * _m.sin(angle))))
+        draw.polygon(pts, fill=(0,0,0,255))
+
+    elif name in ("check", "valide", "valid", "ok", "success", "done", "correct"):
+        # Coche (checkmark) épaisse
+        lw2 = max(6, int(s*0.11))
+        draw.line([(cx-int(s*0.34), cy+int(s*0.02)), (cx-int(s*0.08), cy+int(s*0.28))], fill=(0,0,0,255), width=lw2)
+        draw.line([(cx-int(s*0.08), cy+int(s*0.28)), (cx+int(s*0.36), cy-int(s*0.24))], fill=(0,0,0,255), width=lw2)
+
+    elif name in ("cross", "x", "non", "stop", "interdit", "blocked", "no"):
+        # Croix X
+        lw3 = max(6, int(s*0.11))
+        draw.line([(cx-int(s*0.32), cy-int(s*0.32)), (cx+int(s*0.32), cy+int(s*0.32))], fill=(0,0,0,255), width=lw3)
+        draw.line([(cx+int(s*0.32), cy-int(s*0.32)), (cx-int(s*0.32), cy+int(s*0.32))], fill=(0,0,0,255), width=lw3)
+
+    elif name in ("brain", "cerveau", "ai", "intelligence", "ia"):
+        # Cercle + gyri stylisés (2 arcs)
+        r2 = int(s*0.36)
+        draw.ellipse([cx-r2, cy-r2, cx+r2, cy+r2], fill=(0,0,0,255))
+        draw.line([(cx, cy-r2), (cx, cy+r2)], fill=(255,255,255,255), width=max(4, int(s*0.07)))
+        draw.arc([cx-int(r2*0.55), cy-int(r2*0.45), cx+int(r2*0.55), cy+int(r2*0.45)], start=200, end=340, fill=(255,255,255,255), width=max(3, int(s*0.05)))
+
+    elif name in ("trending", "hausse", "up", "croissance", "growth", "montant"):
+        # Flèche montante stylisée
+        lw4 = max(6, int(s*0.10))
+        draw.line([(cx-int(s*0.38), cy+int(s*0.28)), (cx+int(s*0.38), cy-int(s*0.28))], fill=(0,0,0,255), width=lw4)
+        pts2 = [(cx+int(s*0.38), cy-int(s*0.28)), (cx+int(s*0.14), cy-int(s*0.28)), (cx+int(s*0.38), cy-int(s*0.04))]
+        draw.polygon(pts2, fill=(0,0,0,255))
+
     else:
         # Fallback: cercle plein
         r = int(s*0.38)
