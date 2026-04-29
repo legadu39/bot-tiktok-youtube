@@ -35,8 +35,8 @@ TEXT_DIM_RGB  = (150, 150, 150)
 ACCENT_RGB    = (0,   208, 132)
 MUTED_RGB     = (220,  40,  35)
 
-ACCENT_GRADIENT_LEFT  = (155,  89, 182)   # violet #9B59B6 — référence vidéo
-ACCENT_GRADIENT_RIGHT = (244, 196,  48)   # or     #F4C430 — référence vidéo
+ACCENT_GRADIENT_LEFT  = (187, 154, 196)   # lavender-violet #BB9AC4 — mesuré pixel-exact video_ref t=3s
+ACCENT_GRADIENT_RIGHT = (244, 196,  48)   # or saturé #F4C430 — référence vidéo
 
 
 # ── Couleurs thème INVERSÉ (fond sombre) ─────────────────────────────────────
@@ -142,13 +142,25 @@ SAFE_LEFT  = 80
 SAFE_RIGHT = 80
 
 
+# ── UI Card (PRICE directive — DA Premium) ────────────────────────────────────
+
+UI_CARD_BG_COLOR   = (  0,   0,   0)   # #000000 noir absolu (CLAUDE.md §DA Premium)
+UI_CARD_TEXT_COLOR = (184, 184, 184)   # #B8B8B8 gris mesuré pixel-exact vidéo ref t=6s
+UI_CARD_PADDING_X  = 60               # box_width  = text_w + 2×60
+UI_CARD_PADDING_Y  = 30               # box_height = text_h + 2×30
+UI_CARD_RADIUS     = 16               # border-radius exact CLAUDE.md §DA Premium
+UI_CARD_FONT_SIZE  = 52               # Inter-Regular 52px pour les prix
+
+
 # ── B-Roll Card ───────────────────────────────────────────────────────────────
 
-BROLL_CARD_WIDTH_RATIO    = 0.520   # ~52% largeur — conforme référence (300/576px)
+BROLL_CARD_WIDTH_RATIO    = 0.75    # 810px @ 1080 (FIX 3 2026-04-28)
+BROLL_CARD_HEIGHT_RATIO   = 1.0667  # 864/810 — card quasi-carrée
+BROLL_CARD_RADIUS_PX      = 37      # rayon absolu (indépendant de la résolution)
 BROLL_CARD_CENTER_Y_RATIO = 0.474
 BROLL_TEXT_STAYS_PUT      = True
 BROLL_SHADOW_EXPAND_PX    = 40
-BROLL_CARD_RADIUS_RATIO   = 0.036
+BROLL_CARD_RADIUS_RATIO   = 0.036   # conservé pour rétrocompat imports externes
 BROLL_SHADOW_BLUR         = 18
 BROLL_SHADOW_OPACITY      = 0.33
 

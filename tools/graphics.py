@@ -47,6 +47,9 @@ from .config import (
     CTA_SEARCH_CENTER_Y_RATIO, CTA_SEARCH_WIDTH_RATIO,
     CTA_SEARCH_HEIGHT_RATIO, CTA_TIKTOK_HANDLE,
     FS_BASE, FS_MIN,
+    UI_CARD_BG_COLOR, UI_CARD_TEXT_COLOR,
+    UI_CARD_PADDING_X, UI_CARD_PADDING_Y,
+    UI_CARD_RADIUS, UI_CARD_FONT_SIZE,
 )
 try:
     from .config import BROLL_CARD_HEIGHT_RATIO, BROLL_CARD_RADIUS_PX
@@ -491,32 +494,35 @@ def render_text_gradient(
     max_w:       int   = 920,
 ) -> np.ndarray:
     """
-    MASTER_NEXUS_V36: Gradient TEAL→PINK avec compensation cap-height automatique.
-    color_left  = ACCENT_GRADIENT_LEFT  = (105,228,220) TEAL
-    color_right = ACCENT_GRADIENT_RIGHT = (208,122,148) PINK
+    DA Premium: Gradient lavender-violet → or saturé avec masque alpha parfait.
+    color_left  = ACCENT_GRADIENT_LEFT  = (187,154,196) lavender-violet mesuré
+    color_right = ACCENT_GRADIENT_RIGHT = (244,196, 48) or saturé #F4C430
+
+    Masque alpha : straight (non pré-multiplié) — conserve la saturation des
+    couleurs sur les bords antialiasés et évite les contours pixelisés.
     """
     font, comp_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36
     cw = tw + pad_x * 2
     ch = th + pad_y * 2
 
+    # Rendu texte en blanc pour extraire le masque alpha FreeType
     mask_img = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
     dm       = ImageDraw.Draw(mask_img)
     dm.text((pad_x, pad_y), text, font=font, fill=(255, 255, 255, 255))
     mask_arr = np.array(mask_img)
 
+    # Dégradé horizontal vectorisé
+    xs   = np.linspace(0.0, 1.0, cw, dtype=np.float32)
     grad = np.zeros((ch, cw, 3), dtype=np.float32)
-    for x in range(cw):
-        t = x / max(cw - 1, 1)
-        r = color_left[0] + (color_right[0] - color_left[0]) * t
-        g = color_left[1] + (color_right[1] - color_left[1]) * t
-        b = color_left[2] + (color_right[2] - color_left[2]) * t
-        grad[:, x, :] = [r, g, b]
+    grad[:, :, 0] = color_left[0] + (color_right[0] - color_left[0]) * xs
+    grad[:, :, 1] = color_left[1] + (color_right[1] - color_left[1]) * xs
+    grad[:, :, 2] = color_left[2] + (color_right[2] - color_left[2]) * xs
 
-    alpha  = mask_arr[:, :, 3:4].astype(np.float32) / 255.0
+    # Masque alpha parfait : straight alpha — couleurs gradient à pleine saturation,
+    # transparence contrôlée uniquement par l'alpha FreeType des bords antialiasés.
     result = np.zeros((ch, cw, 4), dtype=np.uint8)
-    rgb    = (grad * alpha).clip(0, 255).astype(np.uint8)
-    result[:, :, :3] = rgb
+    result[:, :, :3] = grad.clip(0, 255).astype(np.uint8)
     result[:, :, 3]  = mask_arr[:, :, 3]
     return result
 
@@ -845,8 +851,9 @@ def render_cta_card(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# BLOC 6B — PRICE scene (3 prix verticaux, gris #B8B8B8, Inter-Regular 52px)
-# FIX 1 2026-04-29: [PRICE:tag] → rendu visuel 3 lignes centré.
+# BLOC 6B — draw_ui_card + PRICE scene (DA Premium)
+# draw_ui_card : carte UI dynamique pour [PRICE] — fond noir, radius 16px exact.
+# render_price_scene : 3 cartes empilées verticalement sur fond blanc.
 # ══════════════════════════════════════════════════════════════════════════════
 
 _PRICE_EXAMPLES = {
@@ -858,7 +865,52 @@ _PRICE_EXAMPLES = {
     "compte":    ("1K$", "5K$", "10K$"),
     "prop":      ("5K$", "25K$", "100K$"),
 }
-_PRICE_COLOR = (184, 184, 184)   # #B8B8B8
+
+
+def draw_ui_card(
+    text:          str,
+    font_size:     int   = UI_CARD_FONT_SIZE,
+    weight:        str   = "regular",
+    bg_color:      tuple = UI_CARD_BG_COLOR,
+    text_color:    tuple = UI_CARD_TEXT_COLOR,
+    padding_x:     int   = UI_CARD_PADDING_X,
+    padding_y:     int   = UI_CARD_PADDING_Y,
+    corner_radius: int   = UI_CARD_RADIUS,
+) -> Image.Image:
+    """
+    DA Premium: Carte UI dynamique pour les directives [PRICE].
+
+    Dimensions calculées dynamiquement à partir du texte mesuré :
+        box_width  = text_width  + padding_x × 2   (défaut: +120px)
+        box_height = text_height + padding_y × 2   (défaut: +60px)
+    Border-radius : corner_radius px exacts (défaut: 16px — CLAUDE.md §DA Premium).
+
+    Typographie :
+        - Inter-Regular (ou Inter-Light selon weight) via ImageFont.truetype
+        - Antialiasing FreeType natif — aucun post-traitement qui pixelise les bords
+        - Couleur texte : #B8B8B8 (mesuré pixel-exact vidéo ref t=6s)
+
+    Fond : #000000 noir absolu, arrondis PIL rounded_rectangle (pillow ≥ 8.2).
+    Retourne une PIL Image RGBA prête à être composée sur la canvas principale.
+    """
+    font, _ = find_font_compensated(weight, font_size)
+    tw, th  = measure_text(text, font)
+
+    box_w = tw + padding_x * 2
+    box_h = th + padding_y * 2
+
+    card = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(card)
+
+    draw.rounded_rectangle(
+        [0, 0, box_w - 1, box_h - 1],
+        radius=corner_radius,
+        fill=bg_color + (255,),
+    )
+
+    draw.text((padding_x, padding_y), text, font=font, fill=text_color + (255,))
+
+    return card
 
 
 def render_price_scene(
@@ -867,14 +919,12 @@ def render_price_scene(
     canvas_h:    int = 1920,
 ) -> np.ndarray:
     """
-    FIX 1 2026-04-29: Rend 3 montants en colonne verticale centrée.
+    DA Premium: 3 cartes UI empilées verticalement, centrées sur fond blanc.
     price_param: clé de _PRICE_EXAMPLES (ex: "challenge") ou "A,B,C" littéral.
-    Style: fond blanc, gris #B8B8B8, Inter-Regular 52px, letter-spacing +8px.
+    Chaque prix est rendu via draw_ui_card() — fond noir, gris #B8B8B8, radius 16px.
     """
-    bg   = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
-    draw = ImageDraw.Draw(bg)
+    bg = Image.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
 
-    # Résoudre les 3 prix
     key = price_param.lower().strip()
     if key in _PRICE_EXAMPLES:
         prices = list(_PRICE_EXAMPLES[key])
@@ -884,48 +934,16 @@ def render_price_scene(
             parts.append(parts[-1] if parts else "—")
         prices = parts[:3]
 
-    # Police Inter-Regular 52px (ou fallback)
-    target_size = 52
-    font = find_font("regular", target_size)
+    cards = [draw_ui_card(p) for p in prices]
 
-    # Letter-spacing simulation: dessine caractère par caractère avec +8px gap
-    def draw_spaced(text, x0, y0, fill):
-        cx_pos = x0
-        for ch in text:
-            draw.text((cx_pos, y0), ch, font=font, fill=fill)
-            try:
-                bbox = draw.textbbox((0, 0), ch, font=font)
-                cx_pos += (bbox[2] - bbox[0]) + 8
-            except Exception:
-                cx_pos += target_size + 8
+    gap     = 20
+    total_h = sum(c.size[1] for c in cards) + gap * (len(cards) - 1)
+    y       = canvas_h // 2 - total_h // 2
 
-    def text_spaced_width(text):
-        w = 0
-        for ch in text:
-            try:
-                bbox = draw.textbbox((0, 0), ch, font=font)
-                w += (bbox[2] - bbox[0]) + 8
-            except Exception:
-                w += target_size + 8
-        return max(0, w - 8)
-
-    def text_height(text):
-        try:
-            bbox = draw.textbbox((0, 0), text, font=font)
-            return bbox[3] - bbox[1]
-        except Exception:
-            return target_size
-
-    line_h = text_height(prices[0]) + 24   # 24px gap inter-ligne
-    total_h = line_h * 3 - 24
-    cy_start = canvas_h // 2 - total_h // 2
-
-    for i, price in enumerate(prices):
-        tw = text_spaced_width(price)
-        th = text_height(price)
-        x0 = (canvas_w - tw) // 2
-        y0 = cy_start + i * line_h
-        draw_spaced(price, x0, y0, _PRICE_COLOR + (255,))
+    for card in cards:
+        x = (canvas_w - card.size[0]) // 2
+        bg.paste(card, (x, y), mask=card.split()[3])
+        y += card.size[1] + gap
 
     return np.array(bg.convert("RGB"))
 
