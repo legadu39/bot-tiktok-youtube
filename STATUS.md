@@ -13,10 +13,10 @@
 | `timeout_manager.py` | ✅ complet | `common.py`, `temp_signals/` | — |
 | `config.yaml` | ⚠️ ALERTE | — | **CLÉS API EXPOSÉES EN CLAIR** — migrer vers .env ou vault |
 | `config.example.yaml` | ✅ complet | — | — |
-| `pyproject.toml` | ✅ complet | — | MoviePy borné à `<2.0` (2026-04-15) — 5 fichiers utilisent API 1.x (`moviepy.editor`, `.set_fps`, `.volumex`, `.subclip`) |
+| `pyproject.toml` | ✅ complet | — | MoviePy borné à `<2.0` — API 1.x requise. FIX 2026-04-29 DA Premium : `rembg>=2.0.50` ajouté aux dépendances (installe onnxruntime + modèle U2Net ~175 Mo au 1er run). |
 | `.gitignore` | ✅ complet | — | Complété 2026-04-15 : `BUFFER/`, `REJECTED/`, `OUTPUT_VIDEO/`, `assets/cache/`, `nexus_system.log`, `*.mp4` + `!video_referencement.mp4`, JSONs de session |
 | **TOOLS/** | | | |
-| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-Bold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy | FIX 2026-04-15 : logo TikTok refait (note 'd' + trait vertical + glitch 3px) ; search pill → bordure bicolore cyan/rouge + mini logo + Inter-Regular. FIX 2026-04-29 DA Premium : `draw_ui_card()` ajoutée — carte [PRICE] fond #000000, texte #B8B8B8, `box_width=text_w+120`, `box_height=text_h+60`, `border-radius=16px` exacts, FreeType natif ; `render_price_scene()` refactorisé via `draw_ui_card()` ; `render_text_gradient()` masque alpha straight (anti-pixelisation). |
+| `tools/graphics.py` | ✅ complet | PIL/Pillow, `fonts/Inter-Regular.ttf` *(police principale)*, `fonts/Inter-Light.ttf`, `fonts/Inter-SemiBold.ttf`, `fonts/Inter-Bold.ttf`, `fonts/Inter-ExtraBold.ttf`, numpy, rembg (optionnel) | FIX 2026-04-15 : logo TikTok refait ; search pill Inter-Regular. FIX 2026-04-29 DA Premium : `draw_ui_card()` — carte [PRICE] fond #000000, texte #B8B8B8, `box_width=text_w+120`, `box_height=text_h+60`, radius=16px, FreeType natif ; `render_price_scene()` refactorisé. FIX 2026-04-29 DA Premium : `compose_pexels_premium()` — rembg détourage + GaussianBlur(25) ombre portée 30% Y+15px + LANCZOS ; fallback crop carré + radius 32px + même ombre ; paramètre `_rembg_fn` injectable pour tests. |
 | `tools/burner.py` | ✅ complet | `tools/graphics.py`, `tools/motion_profiles.py`, `tools/physics.py`, PIL, numpy | FIX 2026-04-16 : SparkleEngine → ★ statiques #7B2FD9 ±80px ; `_get_inversion_bg_color` noir pour toutes sauf CTA ; `_is_sparkle_inversion` toutes inversions noires. FIX 2026-04-17 : `burn_subtitles()` accepte `dark_scene_intervals` (List[Tuple[float,float]]) — remplace la détection word-level inopérante par injection directe des intervalles pré-calculés |
 | `tools/tts_manager.py` | ✅ complet | ElevenLabs API, aiohttp, `assets/cache/tts/` | Voix hardcodées (4 profils) — OK pour l'usage actuel |
 | `tools/motion_profiles.py` | ✅ complet | `tools/physics.py`, numpy | — |
@@ -30,7 +30,7 @@
 | `tools/fx_engine.py` | ✅ complet | `tools/effects.py`, numpy | — |
 | `tools/easing.py` | ✅ complet | numpy | — |
 | `tools/layout.py` | ✅ complet | `tools/text_engine.py` | — |
-| `tools/asset_vault.py` | ✅ complet | `assets/vault/`, `evergreen_vault/` | — |
+| `tools/asset_vault.py` | ✅ complet | `assets/vault/`, `evergreen_vault/`, requests, PIL, rembg (via `tools.graphics`) | FIX 2026-04-29 DA Premium : `fetch_and_cache()` appelle `compose_pexels_premium()` → sauvegarde PNG (RGBA) au lieu de JPEG ; cache check priorité PNG > JPG (rétrocompatibilité legacy) ; fallback JPEG si compose échoue. |
 | `tools/config.py` | ✅ complet | `common.py`, `config.yaml` | FIX 2026-04-29 DA Premium : constantes `UI_CARD_*` ajoutées (bg #000000, text #B8B8B8, padding 60/30, radius 16, font_size 52). |
 | `tools/context.py` | 🔄 partiel | `tools/config.py` | Contenu minimal — wrapper de contexte |
 | `tools/vfx.py` | 🔄 partiel | PIL, numpy | Fonctions VFX supplémentaires non documentées |
@@ -80,7 +80,7 @@
 | `.env` | ❌ absent | — | Devrait contenir les clés API (sécurité) |
 | `requirements.txt` | ✅ complet | `pyproject.toml` | Généré 2026-04-15 via `pip freeze` — 167 packages, Python 3.12.10 |
 | `Makefile` | ❌ absent | — | Serait utile pour les commandes courantes |
-| `tests/` | 🔄 partiel | pytest | `test_physics.py`, `test_easing.py`, `test_timeline.py`, `test_tts_manager.py`, `test_common.py` existants. FIX 2026-04-29 DA Premium : `test_ui_card.py` ajouté (24 tests — dimensions bbox, border-radius, couleurs, render_price_scene). |
+| `tests/` | 🔄 partiel | pytest | `test_physics.py`, `test_easing.py`, `test_timeline.py`, `test_tts_manager.py`, `test_common.py` existants. FIX 2026-04-29 DA Premium : `test_ui_card.py` (24 tests bbox/radius/couleurs) + `test_pexels_premium.py` (21 tests rembg+shadow+LANCZOS+fallback+fetch_and_cache) ajoutés. |
 | `STATUS.md` | ❌ absent (créé) | — | Ce fichier |
 | `BACKLOG.md` | ❌ absent (créé) | — | Fichier suivant |
 | `CLAUDE.md` | ❌ absent (créé) | — | Fichier suivant |

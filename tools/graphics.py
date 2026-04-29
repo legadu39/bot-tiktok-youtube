@@ -548,6 +548,112 @@ def load_asset_image(keyword: str) -> Optional[np.ndarray]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# BLOC 3B — Pipeline asset Pexels premium (DA Premium)
+# compose_pexels_premium : rembg détourage + ombre portée + LANCZOS.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compose_pexels_premium(
+    img:             Image.Image,
+    target_w:        int   = 810,
+    target_h:        int   = 864,
+    shadow_blur:     int   = 25,
+    shadow_opacity:  float = 0.30,
+    shadow_offset_y: int   = 15,
+    fallback_radius: int   = 32,
+    _rembg_fn               = None,
+) -> Image.Image:
+    """
+    DA Premium: Pipeline de compositing photo Pexels haut de gamme.
+
+    Flux principal (rembg disponible) :
+      1. rembg.remove() → sujet détouré RGBA (fond transparent)
+      2. Redimensionnement Image.Resampling.LANCZOS → target_w × target_h (fit)
+      3. Ombre portée:
+           - Duplique le canal alpha du sujet
+           - Remplit de noir #000000
+           - GaussianBlur(radius=shadow_blur=25)
+           - Opacité shadow_opacity=30%
+           - Décalage Y + shadow_offset_y=15px
+      4. Superpose le sujet détouré par-dessus l'ombre
+
+    Flux fallback (rembg échoue / absent) :
+      - Crop centré carré → border-radius fallback_radius=32px → même ombre portée
+
+    _rembg_fn : callable injectable pour les tests (None = import automatique rembg).
+
+    Retourne une PIL Image RGBA (fond transparent) prête à être composée.
+    """
+    subject: Optional[Image.Image] = None
+
+    # ── Tentative rembg ──────────────────────────────────────────────────────
+    try:
+        if _rembg_fn is None:
+            from rembg import remove as _rembg_fn_auto
+            _rembg_fn = _rembg_fn_auto
+
+        removed = _rembg_fn(img.convert("RGBA"))
+
+        # rembg peut retourner bytes ou PIL Image selon la version
+        if isinstance(removed, (bytes, bytearray)):
+            import io as _io
+            removed = Image.open(_io.BytesIO(removed)).convert("RGBA")
+        else:
+            removed = removed.convert("RGBA")
+
+        # Resize LANCZOS : fit dans target (préserve le ratio)
+        scale   = min(target_w / max(removed.width, 1), target_h / max(removed.height, 1))
+        new_w   = max(1, int(removed.width  * scale))
+        new_h   = max(1, int(removed.height * scale))
+        subject = removed.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    except Exception:
+        subject = None
+
+    # ── Fallback : crop carré + border-radius ────────────────────────────────
+    if subject is None:
+        src  = img.convert("RGBA")
+        sq   = min(src.width, src.height)
+        left = (src.width  - sq) // 2
+        top  = (src.height - sq) // 2
+        src  = src.crop((left, top, left + sq, top + sq))
+        side = min(sq, min(target_w, target_h))
+        src  = src.resize((side, side), Image.Resampling.LANCZOS)
+        # Arrondi border-radius exact (32px par défaut — CLAUDE.md §DA Premium)
+        mask = Image.new("L", src.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            [0, 0, src.width - 1, src.height - 1],
+            radius=fallback_radius,
+            fill=255,
+        )
+        src.putalpha(mask)
+        subject = src
+
+    # ── Canvas de composition target_w × target_h (fond transparent) ─────────
+    canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+    sx     = (target_w - subject.width)  // 2
+    sy     = (target_h - subject.height) // 2
+
+    # ── Ombre portée ─────────────────────────────────────────────────────────
+    # 1. Duplique le canal alpha du sujet
+    alpha_ch = subject.split()[3]
+    # 2. Remplit de noir #000000 avec opacité shadow_opacity
+    black_fill = Image.new("RGBA", subject.size, (0, 0, 0, 0))
+    black_fill.paste(
+        Image.new("RGBA", subject.size, (0, 0, 0, int(shadow_opacity * 255))),
+        mask=alpha_ch,
+    )
+    # 3. GaussianBlur(radius=25)
+    shadow = black_fill.filter(ImageFilter.GaussianBlur(shadow_blur))
+    # 4. Colle l'ombre décalée de Y+shadow_offset_y
+    canvas.paste(shadow, (sx, sy + shadow_offset_y), mask=shadow.split()[3])
+
+    # 5. Superpose le sujet détouré par-dessus l'ombre
+    canvas.paste(subject, (sx, sy), mask=subject.split()[3])
+
+    return canvas
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MASTER_NEXUS_V36: BLOC 4 — B-Roll Card procédurale premium
 # Génère une image JPEG plate (sans chrome) pour render_broll_card().
 # ══════════════════════════════════════════════════════════════════════════════

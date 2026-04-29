@@ -317,9 +317,14 @@ class AssetVault:
 
     def fetch_and_cache(self, description: str, timeout: int = 5) -> Optional[str]:
         """
-        Cherche une photo Pexels correspondant à la description, la redimensionne
-        en 1080×1920 et la met en cache dans assets_vault/.
+        Cherche une photo Pexels, applique le pipeline DA Premium (rembg + ombre portée),
+        met le résultat en cache PNG dans assets_vault/.
         Retourne le chemin local ou None en cas d'échec.
+
+        Pipeline DA Premium (priorité PNG) :
+          1. compose_pexels_premium() : rembg détourage + GaussianBlur shadow + LANCZOS
+          2. Sauvegarde PNG (RGBA) — cache_path_png
+          Fallback si compose échoue : crop 1080×1920 JPEG standard — cache_path_jpg.
         """
         import requests
         from PIL import Image as _PIL
@@ -332,19 +337,22 @@ class AssetVault:
         if not query:
             return None
 
-        query_hash = hashlib.md5(query.lower().encode()).hexdigest()[:12]
-        cache_path = self.assets_dir / f"pexels_{query_hash}.jpg"
+        query_hash    = hashlib.md5(query.lower().encode()).hexdigest()[:12]
+        cache_path_png = self.assets_dir / f"pexels_{query_hash}.png"
+        cache_path_jpg = self.assets_dir / f"pexels_{query_hash}.jpg"
 
-        # Cache hit — index
+        # Cache hit — index (supporte PNG et JPG)
         for asset in self.index.get("assets", []):
             if asset.get("pexels_query_hash") == query_hash:
                 lp = asset.get("local_path", "")
                 if os.path.exists(lp):
                     return lp
 
-        # Cache hit — fichier sur disque (index désynchronisé)
-        if cache_path.exists():
-            return str(cache_path)
+        # Cache hit — fichier sur disque (index désynchronisé) : PNG prioritaire
+        if cache_path_png.exists():
+            return str(cache_path_png)
+        if cache_path_jpg.exists():
+            return str(cache_path_jpg)
 
         # Appel API
         try:
@@ -373,9 +381,9 @@ class AssetVault:
             return None
 
         # Meilleure photo : portrait le plus grand
-        best = max(photos, key=lambda p: p.get("height", 0))
-        src = best.get("src", {})
-        img_url = src.get("original") or src.get("large2x") or src.get("large")
+        best      = max(photos, key=lambda p: p.get("height", 0))
+        src       = best.get("src", {})
+        img_url   = src.get("original") or src.get("large2x") or src.get("large")
         pexels_id = best.get("id", "")
 
         if not img_url:
@@ -391,21 +399,36 @@ class AssetVault:
         if img_resp.status_code != 200:
             return None
 
-        # Crop centré + resize 1080×1920
+        # ── Pipeline DA Premium : rembg + ombre portée + LANCZOS ─────────────
+        final_path: Optional[str] = None
         try:
-            img = _PIL.open(io.BytesIO(img_resp.content)).convert("RGB")
-            target_w, target_h = 1080, 1920
-            img_w, img_h = img.size
-            scale = max(target_w / img_w, target_h / img_h)
-            new_w, new_h = int(img_w * scale), int(img_h * scale)
-            resample = getattr(_PIL, "LANCZOS", getattr(_PIL, "Resampling", None))
-            if hasattr(resample, "LANCZOS"):
-                resample = resample.LANCZOS
-            img = img.resize((new_w, new_h), resample)
-            left = (new_w - target_w) // 2
-            top  = (new_h - target_h) // 2
-            img  = img.crop((left, top, left + target_w, top + target_h))
-            img.save(str(cache_path), quality=90, optimize=True)
+            img_raw = _PIL.open(io.BytesIO(img_resp.content)).convert("RGB")
+
+            # Dimensions cible de la B-Roll card (config.BROLL_CARD_WIDTH_RATIO = 0.75)
+            card_w = int(1080 * 0.75)          # 810px
+            card_h = int(card_w * 1.0667)      # 864px
+
+            try:
+                from tools.graphics import compose_pexels_premium
+                premium = compose_pexels_premium(img_raw, target_w=card_w, target_h=card_h)
+                premium.save(str(cache_path_png), "PNG")
+                final_path = str(cache_path_png)
+                jlog("vault", msg=f"[VAULT] Pexels premium PNG → '{query}' ({cache_path_png.name})")
+            except Exception as premium_err:
+                jlog("warning", msg=f"[VAULT] compose_pexels_premium échoué ({premium_err}) — fallback JPEG")
+                # Fallback: crop centré 1080×1920, JPEG standard
+                target_w_full, target_h_full = 1080, 1920
+                img_w, img_h = img_raw.size
+                scale   = max(target_w_full / img_w, target_h_full / img_h)
+                new_w   = int(img_w * scale)
+                new_h   = int(img_h * scale)
+                img_raw = img_raw.resize((new_w, new_h), _PIL.Resampling.LANCZOS)
+                left    = (new_w - target_w_full) // 2
+                top     = (new_h - target_h_full) // 2
+                img_raw = img_raw.crop((left, top, left + target_w_full, top + target_h_full))
+                img_raw.save(str(cache_path_jpg), quality=90, optimize=True)
+                final_path = str(cache_path_jpg)
+
         except Exception as e:
             jlog("warning", msg=f"[VAULT] Pexels image processing error: {e}")
             return None
@@ -415,7 +438,7 @@ class AssetVault:
         tokens.update(self._tokenize(query))
         asset_entry = {
             "id":                 f"AST_{int(time.time())}_{random.randint(1000, 9999)}",
-            "local_path":         str(cache_path),
+            "local_path":         final_path,
             "prompt":             description,
             "keywords":           list(tokens),
             "source":             "pexels",
@@ -428,8 +451,7 @@ class AssetVault:
         }
         self.index.setdefault("assets", []).append(asset_entry)
         self._save_index()
-        jlog("vault", msg=f"[VAULT] Pexels → '{query}' sauvegardé ({cache_path.name})")
-        return str(cache_path)
+        return final_path
 
     async def fetch_image(self, query: str, keywords: List[str] = []) -> str:
         match = self.find_best_match(query, keywords, is_hook=False)
