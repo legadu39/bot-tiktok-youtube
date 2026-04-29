@@ -272,8 +272,12 @@ RÈGLES DE PRODUCTION — NEXUS MASTER V38 (RESPECTE CHAQUE POINT)
       → Le texte est lu mais l'écran montre l'icône seule.
 
    c) [PRICE:montant1,montant2,montant3] — Comparaison de prix
-      Usage : Quand tu compares des TARIFS, des OFFRES, des NIVEAUX.
-      → L'écran montre 3 blocs colorés avec les prix.
+      Usage : Quand tu compares des TARIFS, des OFFRES, des NIVEAUX de compte.
+      Les montants DOIVENT être cohérents avec le sujet traité.
+      Exemples PropFirm/trading : [PRICE:5 000$,25 000$,100 000$]
+      Exemples frais/abonnement : [PRICE:49$,99$,199$]
+      Exemples performance/gain : [PRICE:+500$,+2 000$,+8 000$]
+      → L'écran montre 3 montants centrés en gris clair.
 
    d) [REPEATER:element] — Grille de motifs répétitifs
       Usage : Quand tu veux un effet de MASSE, d'ACCUMULATION, de VOLUME.
@@ -334,7 +338,7 @@ VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK
 
 SCENE 6
-TEXTE: [PRICE:79$,99$,179$]
+TEXTE: [PRICE:5 000$,25 000$,100 000$]
 VISUEL: FOND BLANC #FFFFFF STRICT
 OVERLAY: CLICK_DEEP
 

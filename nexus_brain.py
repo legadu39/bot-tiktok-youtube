@@ -1602,24 +1602,10 @@ class NexusBrain:
                 ))
                 continue
 
-            # ── Fallback procédural ─────────────────────────────────────────
-            broll_path = os.path.join(self.root_dir, f"broll_v38_{i:03d}.jpg")
-            try:
-                generate_procedural_broll_card(
-                    scene_text  = scene.get("text", ""),
-                    output_path = broll_path,
-                    canvas_w    = 1080,
-                    scene_index = i,
-                    is_hook     = (i == 0),
-                )
-                scene["_broll_image_path"] = broll_path
-                broll_count += 1
-                jlog("info", msg=(
-                    f"[VAULT] fallback procédural → "
-                    f"{Path(broll_path).name} (scène {i})"
-                ))
-            except Exception as e:
-                jlog("warning", msg=f"B-Roll procédural échoué scène {i}: {e}")
+            # FIX 3 2026-04-29: pas de fallback procédural — scène rendue en texte normal.
+            # Un rectangle noir vide dégrade la qualité visuelle.
+            # La scène reste sans _broll_image_path → exclue du broll_schedule.
+            jlog("info", msg=f"[VAULT] pas d'image disponible pour scène {i} → texte normal")
 
         jlog("info", msg=(
             f"NEXUS_MASTER_V38: Visuels finalisés — "

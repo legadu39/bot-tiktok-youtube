@@ -934,29 +934,50 @@ def render_price_scene(
 # Référence vidéo frame t=28s : fond #838383, emoji 🏢 tilé, "doublé" en blanc.
 # ══════════════════════════════════════════════════════════════════════════════
 
-_REPEATER_BG = (131, 131, 131)   # #838383
+_REPEATER_BG = (26, 26, 26)   # FIX 1 2026-04-29: #1A1A1A quasi-noir
+
+# FIX 1 2026-04-29: mapping nom → emoji reconnaissable pour les tiles REPEATER
+_REPEATER_TILE_MAP: dict = {
+    "chart":      "📊", "graphique": "📊", "graph":   "📊", "courbe":  "📊",
+    "money":      "💰", "argent":    "💰", "cash":    "💰", "dollar":  "💰",
+    "calculator": "🧮", "calcul":    "🧮", "calc":    "🧮",
+    "building":   "🏢", "immeuble":  "🏢", "bureau":  "🏢", "firm":    "🏢",
+    "phone":      "📱", "telephone": "📱", "mobile":  "📱",
+    "lock":       "🔒", "cadenas":   "🔒", "secure":  "🔒",
+    "fire":       "🔥", "feu":       "🔥",
+    "rocket":     "🚀", "fusée":     "🚀",
+    "star":       "⭐", "etoile":    "⭐",
+    "check":      "✅", "valide":    "✅",
+    "target":     "🎯", "cible":     "🎯",
+    "brain":      "🧠", "cerveau":   "🧠",
+    "diamond":    "💎", "diamant":   "💎",
+    "crown":      "👑", "couronne":  "👑",
+    "lightning":  "⚡", "eclair":    "⚡",
+    "eye":        "👁",  "oeil":     "👁",
+    "clock":      "⏰", "horloge":   "⏰",
+}
+
 
 def render_repeater_scene(
     word:     str,
-    tile:     str = "■",
+    tile:     str = "🏢",
     canvas_w: int = 1080,
     canvas_h: int = 1920,
 ) -> np.ndarray:
     """
-    Génère un frame plein écran REPEATER :
-        - Fond gris #838383
-        - Caractère/emoji tilé en grille dense (couleur légèrement plus sombre)
-        - Mot principal en blanc ExtraBold centré à 50% V
-
-    `tile` peut être un emoji (🏢) ou un caractère quelconque.
-    Sur Windows, Segoe UI Emoji est tenté en priorité pour le tileage.
-    Fallback garanti sur caractère ASCII si la font emoji est indisponible.
+    FIX 1 2026-04-29: REPEATER avec emoji tiles reconnaissables.
+        - Fond quasi-noir #1A1A1A
+        - Tile = emoji résolu depuis _REPEATER_TILE_MAP (défaut 🏢)
+        - Mot principal en blanc Regular centré à 50% V
     """
-    bg = Image.new("RGB", (canvas_w, canvas_h), _REPEATER_BG)
+    bg   = Image.new("RGB", (canvas_w, canvas_h), _REPEATER_BG)
     draw = ImageDraw.Draw(bg)
 
+    # Résoudre le tile : nom → emoji
+    tile_emoji = _REPEATER_TILE_MAP.get(tile.lower().strip(), "🏢")
+
     # ── Font emoji pour le tileage ────────────────────────────────────────
-    tile_size = max(48, int(canvas_w * 0.055))
+    tile_size = 48
     tile_font = None
     for fp in [
         "C:/Windows/Fonts/seguiemj.ttf",
@@ -970,27 +991,29 @@ def render_repeater_scene(
                 break
         except Exception:
             continue
-    if tile_font is None:
-        tile_font = find_font("regular", tile_size)
-        tile = "■"   # fallback ASCII si pas de font emoji
 
     # ── Grille dense ──────────────────────────────────────────────────────
-    tile_color = (100, 100, 100)   # légèrement plus sombre que le fond
-    spacing    = int(tile_size * 1.25)
-    for row_y in range(-spacing, canvas_h + spacing, spacing):
-        for col_x in range(-spacing, canvas_w + spacing, spacing):
-            try:
-                draw.text((col_x, row_y), tile, font=tile_font, fill=tile_color)
-            except Exception:
-                draw.text((col_x, row_y), "■", font=tile_font, fill=tile_color)
+    spacing = int(tile_size * 1.6)
+    if tile_font is not None:
+        for row_y in range(-spacing, canvas_h + spacing, spacing):
+            for col_x in range(-spacing, canvas_w + spacing, spacing):
+                try:
+                    draw.text((col_x, row_y), tile_emoji, font=tile_font)
+                except Exception:
+                    pass
+    else:
+        # Fallback ASCII sur fond sombre
+        asc_font = find_font("regular", tile_size)
+        tile_color = (55, 55, 55)
+        for row_y in range(-spacing, canvas_h + spacing, spacing):
+            for col_x in range(-spacing, canvas_w + spacing, spacing):
+                draw.text((col_x, row_y), "■", font=asc_font, fill=tile_color)
 
     # ── Mot principal en blanc Regular centré ─────────────────────────────
-    # P1B FIX 2026-04-28: Regular weight ~36px (référence mesurée vs ExtraBold 90px pipeline).
     clean = re.sub(r'\[.*?\]', '', word).strip() or word.strip()
     word_font, _, tw, th = auto_size_font(clean, "regular", 36, canvas_w - 80)
     tx = (canvas_w - tw) // 2
     ty = int(canvas_h * 0.499) - th // 2
-    # Texte blanc (sans ombre pour coller à la référence)
     draw.text((tx, ty), clean, font=word_font, fill=(255, 255, 255))
 
     return np.array(bg)
@@ -1164,8 +1187,41 @@ def render_icon_scene(
         draw.polygon(pts2, fill=(0,0,0,255))
 
     else:
-        # Fallback: cercle plein
-        r = int(s*0.38)
-        draw.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(0,0,0,255))
+        # FIX 2 2026-04-29: pas de cercle — emoji via _ICON_MAP puis texte
+        rendered = False
+        emoji_char = _ICON_MAP.get(name)
+        if emoji_char:
+            emoji_font = None
+            for fp in [
+                "C:/Windows/Fonts/seguiemj.ttf",
+                "C:/Windows/Fonts/seguisym.ttf",
+                "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+            ]:
+                try:
+                    if os.path.exists(fp):
+                        emoji_font = ImageFont.truetype(fp, s)
+                        break
+                except Exception:
+                    continue
+            if emoji_font:
+                try:
+                    bbox = draw.textbbox((0, 0), emoji_char, font=emoji_font)
+                    draw.text(
+                        (cx - (bbox[0]+bbox[2])//2, cy - (bbox[1]+bbox[3])//2),
+                        emoji_char, font=emoji_font,
+                    )
+                    rendered = True
+                except Exception:
+                    pass
+        if not rendered:
+            # Dernier recours : nom en texte Inter-Regular 68px noir
+            txt_font = find_font("regular", 68)
+            try:
+                bbox = draw.textbbox((0, 0), name, font=txt_font)
+                tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
+                draw.text((cx - tw//2, cy - th//2), name, font=txt_font, fill=(20, 20, 20, 255))
+            except Exception:
+                pass
 
     return np.array(bg.convert("RGB"))
