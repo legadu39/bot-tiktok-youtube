@@ -198,16 +198,17 @@ nexus-auto-v3/
 | Composant | État | Notes |
 |-----------|------|-------|
 | Pipeline génération vidéo | ✅ Terminé | `nexus_brain.py` V38 stable |
-| Moteur de rendu (burner + graphics) | ✅ Terminé | Spring physics, cap-height, B-rolls |
-| TTS ElevenLabs | ✅ Terminé | Cache hash, 4 voix, mode test |
+| Moteur de rendu (burner + graphics) | ✅ Terminé | Spring physics, cap-height, B-rolls, outro pixel-perfect |
+| TTS ElevenLabs | ✅ Terminé | Cache hash, 4 voix, mode test (`TTS_TEST_MODE=true`) |
 | Upload TikTok | ✅ Terminé | Fuzzy CDP, auto-retry |
 | Upload YouTube | ✅ Terminé | Playwright ARIA |
 | Orchestration daemon | ✅ Terminé | Multi-process, heartbeat, circuit breaker |
 | Collecte Gemini headless | ✅ Terminé | Multi-producteur, healing memory |
+| Pipeline assets visuels | ✅ Terminé | `fetch_and_cache(url)` rembg U2Net — PNG RGBA fond blanc pur, Pexels/Unsplash supprimés |
 | Sécurité config | ❌ Manquant | Clés API exposées dans `config.yaml` |
-| Tests unitaires | ❌ Manquant | Aucun test dans le projet |
-| Documentation | 🔄 En cours | STATUS/BACKLOG/CLAUDE en création |
-| `video_referencement.mp4` analysée | 🔄 En cours | Présente mais pas encore analysée manuellement |
+| Tests unitaires | 🔄 En cours | 81 tests (physics/easing/timeline/tts/common/ui_card/pexels_premium/kinetic_pivot/cta_card/asset_rembg) |
+| Documentation | 🔄 En cours | STATUS/BACKLOG/CLAUDE à jour |
+| `video_referencement.mp4` analysée | ✅ Terminé | Paramètres extraits — section "Format vidéo de référence" ci-dessous |
 
 ---
 

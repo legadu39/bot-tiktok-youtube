@@ -50,6 +50,18 @@
 
 ---
 
+## ✅ Terminé
+
+| Tâche | Fichier | Date |
+|-------|---------|------|
+| **Correctif Assets rembg** — Pexels/Unsplash supprimés ; `fetch_and_cache(url)` pipeline 3 étapes : download → `rembg.remove()` → canvas blanc #FFFFFF RGBA 810×864, centré LANCZOS ; aucun fallback externe | `tools/asset_vault.py`, `requirements.txt`, `tests/unit/test_asset_rembg.py` | 2026-04-30 |
+| **DA Premium : UI cards [PRICE]** — `draw_ui_card()`, fond #000000, texte #B8B8B8, radius 16px | `tools/graphics.py`, `tools/config.py` | 2026-04-29 |
+| **DA Premium : pipeline Pexels Premium rembg+shadow** — `compose_pexels_premium()`, ombre GaussianBlur 30%, LANCZOS | `tools/graphics.py`, `tools/asset_vault.py` | 2026-04-29 |
+| **DA Premium : spring physics sub-pixel kinetic text** — scale 80%→103%, alpha linéaire 3 frames, pivot bbox | `tools/compositor.py`, `tools/burner.py`, `tools/graphics.py` | 2026-04-30 |
+| **DA Premium : outro pixel-perfect TikTok** — fond #0D1019, pill #1A1D27 radius 8px, logo placeholder | `tools/graphics.py`, `tools/config.py` | 2026-04-30 |
+
+---
+
 ## P3 — Nice-to-have / Optimisation
 
 | Priorité | Tâche | Fichier concerné | Taille | Dépend de |

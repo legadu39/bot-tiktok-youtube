@@ -30,7 +30,7 @@
 | `tools/fx_engine.py` | ✅ complet | `tools/effects.py`, numpy | — |
 | `tools/easing.py` | ✅ complet | numpy | — |
 | `tools/layout.py` | ✅ complet | `tools/text_engine.py` | — |
-| `tools/asset_vault.py` | ✅ complet | `assets/vault/`, `evergreen_vault/`, requests, PIL, rembg (via `tools.graphics`) | FIX 2026-04-29 DA Premium : `fetch_and_cache()` appelle `compose_pexels_premium()` → sauvegarde PNG (RGBA) au lieu de JPEG ; cache check priorité PNG > JPG (rétrocompatibilité legacy) ; fallback JPEG si compose échoue. |
+| `tools/asset_vault.py` | ✅ complet | `assets_vault/`, requests, PIL, rembg | FIX 2026-04-29 DA Premium : `fetch_and_cache()` → pipeline rembg. FIX 2026-04-30 : **Pexels/Unsplash supprimés intégralement** — `_FR_TO_EN`, `_extract_pexels_query()` retirés ; `fetch_and_cache(url, timeout=10)` : 3 étapes exactes : (1) `requests.get(url)` (2) `rembg.remove(input_bytes)` (3) canvas RGBA blanc pur #FFFFFF 810×864, sujet centré LANCZOS — aucun fallback externe, aucune ombre, mode RGBA garanti. |
 | `tools/config.py` | ✅ complet | `common.py`, `config.yaml` | FIX 2026-04-29 DA Premium : constantes `UI_CARD_*` ajoutées (bg #000000, text #B8B8B8, padding 60/30, radius 16, font_size 52). FIX 2026-04-30 DA Premium outro : `CTA_BG_COLOR=(13,16,25)` (#0D1019) ; `CTA_SEARCH_CENTER_Y_RATIO=0.55` ; `CTA_SEARCH_RADIUS=8`. |
 | `tools/context.py` | 🔄 partiel | `tools/config.py` | Contenu minimal — wrapper de contexte |
 | `tools/vfx.py` | 🔄 partiel | PIL, numpy | Fonctions VFX supplémentaires non documentées |
@@ -78,9 +78,9 @@
 | `HOLDING/pacer_state.json` | ✅ complet | — | — |
 | **ABSENTS / MANQUANTS** | | | |
 | `.env` | ❌ absent | — | Devrait contenir les clés API (sécurité) |
-| `requirements.txt` | ✅ complet | `pyproject.toml` | Généré 2026-04-15 via `pip freeze` — 167 packages, Python 3.12.10 |
+| `requirements.txt` | ✅ complet | `pyproject.toml` | Généré 2026-04-15 via `pip freeze` — 167 packages, Python 3.12.10. FIX 2026-04-30 : `rembg>=2.0.50` ajouté (install : `pip install rembg`). |
 | `Makefile` | ❌ absent | — | Serait utile pour les commandes courantes |
-| `tests/` | 🔄 partiel | pytest | `test_physics.py`, `test_easing.py`, `test_timeline.py`, `test_tts_manager.py`, `test_common.py` existants. FIX 2026-04-29 DA Premium : `test_ui_card.py` (24 tests bbox/radius/couleurs) + `test_pexels_premium.py` (21 tests rembg+shadow+LANCZOS+fallback+fetch_and_cache) ajoutés. FIX 2026-04-30 DA Premium : `test_kinetic_pivot.py` (18 tests : flat sans ombre, alpha_da rampe 3 frames, scale_da [80%,~103%], pivot absolu ±1px à toutes les scales). `test_cta_card.py` (15 tests : smoke, fond #0D1019, pill #1A1D27, zéro bordure parasite, handle blanc, placeholder transparent). |
+| `tests/` | 🔄 partiel | pytest | `test_physics.py`, `test_easing.py`, `test_timeline.py`, `test_tts_manager.py`, `test_common.py` existants. FIX 2026-04-29 DA Premium : `test_ui_card.py` (24) + `test_pexels_premium.py` (21) ajoutés. FIX 2026-04-30 DA Premium : `test_kinetic_pivot.py` (18) + `test_cta_card.py` (15). FIX 2026-04-30 pipeline rembg : `tests/unit/test_asset_rembg.py` (3 tests : RGBA mode, coins #FFFFFF, zéro appel pexels.com) — mock `sys.modules["rembg"]` pour CI sans onnxruntime. |
 | `STATUS.md` | ❌ absent (créé) | — | Ce fichier |
 | `BACKLOG.md` | ❌ absent (créé) | — | Fichier suivant |
 | `CLAUDE.md` | ❌ absent (créé) | — | Fichier suivant |

@@ -264,196 +264,102 @@ class AssetVault:
             self._save_index()
 
     # -------------------------------------------------------------------------
-    # PEXELS AUTO-FEED
+    # PIPELINE REMBG — détourage PNG sur fond blanc pur
+    # Pexels/Unsplash supprimés — aucun fallback externe.
     # -------------------------------------------------------------------------
 
-    _FR_TO_EN = {
-        "argent": "money", "argents": "money", "finances": "finance", "financier": "finance",
-        "trading": "trading", "trader": "trader", "bourse": "stock market",
-        "investissement": "investment", "investir": "investment",
-        "graphique": "chart", "graphiques": "chart",
-        "entreprise": "business", "entreprises": "business",
-        "stratégie": "strategy", "stratégies": "strategy",
-        "succès": "success", "réussite": "success",
-        "comptable": "accounting", "comptabilité": "accounting",
-        "fiscalité": "tax", "impôt": "tax", "impôts": "tax",
-        "croissance": "growth", "profit": "profit", "gain": "gain",
-        "smartphone": "smartphone", "téléphone": "phone",
-        "ordinateur": "computer", "écran": "screen",
-        "cerveau": "brain", "feu": "fire", "fusée": "rocket",
-        "diamant": "diamond", "cadenas": "lock", "alerte": "alert",
-        "données": "data", "code": "code", "technologie": "technology",
-        "marché": "market", "économie": "economy",
-        "main": "hand", "mains": "hands", "bureau": "desk", "travail": "work",
-        "réunion": "meeting", "équipe": "team", "personne": "person",
-        "homme": "man", "femme": "woman", "affaires": "business",
-        "propriété": "property", "immobilier": "real estate",
-        "voiture": "car", "nature": "nature", "ville": "city",
-    }
-
-    def _extract_pexels_query(self, description: str) -> str:
-        clean = re.sub(r'\[.*?\]', '', description).strip()
-        words = re.findall(r'[a-zA-ZÀ-ÿ]+', clean)
-        stop_fr = {
-            "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou",
-            "en", "sur", "pour", "par", "avec", "dans", "que", "qui", "est",
-            "sont", "une", "aux", "au", "ce", "cette", "ces", "son", "sa",
-            "ses", "leur", "leurs", "il", "elle", "ils", "elles", "on",
-            "the", "a", "an", "of", "and", "or", "in", "on", "for", "by",
-            "to", "with", "is", "image", "photo", "generate", "cinematic",
-            "abstract", "background", "pattern", "repeater", "grid",
-        }
-        keywords = []
-        for w in words:
-            w_low = w.lower()
-            if w_low in stop_fr or len(w_low) < 3:
-                continue
-            translated = self._FR_TO_EN.get(w_low, w_low)
-            if translated not in keywords:
-                keywords.append(translated)
-            if len(keywords) >= 3:
-                break
-        return " ".join(keywords) if keywords else ""
-
-    def fetch_and_cache(self, description: str, timeout: int = 5) -> Optional[str]:
+    def fetch_and_cache(self, url: str, timeout: int = 10) -> Optional[str]:
         """
-        Cherche une photo Pexels, applique le pipeline DA Premium (rembg + ombre portée),
-        met le résultat en cache PNG dans assets_vault/.
-        Retourne le chemin local ou None en cas d'échec.
+        Pipeline asset rembg — 3 étapes exactes :
+            1. Télécharger les bytes bruts depuis url  (requests.get)
+            2. output_bytes = rembg.remove(input_bytes)
+            3. Coller le PNG RGBA sur canvas blanc pur #FFFFFF, centré pixel-perfect
 
-        Pipeline DA Premium (priorité PNG) :
-          1. compose_pexels_premium() : rembg détourage + GaussianBlur shadow + LANCZOS
-          2. Sauvegarde PNG (RGBA) — cache_path_png
-          Fallback si compose échoue : crop 1080×1920 JPEG standard — cache_path_jpg.
+        Contraintes non négociables :
+            - Aucun appel Pexels/Unsplash, aucun fallback externe
+            - Pas d'ombre portée, pas de flou, pas d'effet sur le sujet détouré
+            - Mode de sortie : RGBA
+            - Fond de sortie : #FFFFFF blanc pur
+            - Timeout max : 10s
+
+        Retourne le chemin local PNG (RGBA) ou None si échec.
         """
         import requests
+        import rembg
         from PIL import Image as _PIL
 
-        api_key = os.getenv("PEXELS_API_KEY", "")
-        if not api_key or api_key in ("YOUR_PEXELS_KEY_HERE", ""):
+        if not url:
             return None
 
-        query = self._extract_pexels_query(description)
-        if not query:
-            return None
+        url_hash   = hashlib.md5(url.encode()).hexdigest()[:12]
+        cache_path = self.assets_dir / f"asset_{url_hash}.png"
 
-        query_hash    = hashlib.md5(query.lower().encode()).hexdigest()[:12]
-        cache_path_png = self.assets_dir / f"pexels_{query_hash}.png"
-        cache_path_jpg = self.assets_dir / f"pexels_{query_hash}.jpg"
-
-        # Cache hit — index (supporte PNG et JPG)
+        # Cache hit — index
         for asset in self.index.get("assets", []):
-            if asset.get("pexels_query_hash") == query_hash:
+            if asset.get("url_hash") == url_hash:
                 lp = asset.get("local_path", "")
                 if os.path.exists(lp):
                     return lp
 
-        # Cache hit — fichier sur disque (index désynchronisé) : PNG prioritaire
-        if cache_path_png.exists():
-            return str(cache_path_png)
-        if cache_path_jpg.exists():
-            return str(cache_path_jpg)
+        # Cache hit — fichier sur disque (index désynchronisé)
+        if cache_path.exists():
+            return str(cache_path)
 
-        # Appel API
+        # ── Étape 1 : Téléchargement ─────────────────────────────────────────
         try:
-            resp = requests.get(
-                "https://api.pexels.com/v1/search",
-                headers={"Authorization": api_key},
-                params={
-                    "query": query,
-                    "orientation": "portrait",
-                    "per_page": 5,
-                    "size": "large",
-                },
-                timeout=timeout,
-            )
+            resp = requests.get(url, timeout=timeout)
         except Exception as e:
-            jlog("warning", msg=f"[VAULT] Pexels search timeout/error: {e}")
+            jlog("warning", msg=f"[VAULT] Download error: {e}")
             return None
 
         if resp.status_code != 200:
-            jlog("warning", msg=f"[VAULT] Pexels API {resp.status_code} pour '{query}'")
+            jlog("warning", msg=f"[VAULT] HTTP {resp.status_code} pour '{url[:60]}'")
             return None
 
-        photos = resp.json().get("photos", [])
-        if not photos:
-            jlog("vault", msg=f"[VAULT] Pexels: aucune photo pour '{query}'")
-            return None
+        input_bytes = resp.content
 
-        # Meilleure photo : portrait le plus grand
-        best      = max(photos, key=lambda p: p.get("height", 0))
-        src       = best.get("src", {})
-        img_url   = src.get("original") or src.get("large2x") or src.get("large")
-        pexels_id = best.get("id", "")
-
-        if not img_url:
-            return None
-
-        # Téléchargement
+        # ── Étape 2 : rembg.remove() — détourage U2Net ───────────────────────
         try:
-            img_resp = requests.get(img_url, timeout=timeout)
+            output_bytes = rembg.remove(input_bytes)
+            subject      = _PIL.open(io.BytesIO(output_bytes)).convert("RGBA")
         except Exception as e:
-            jlog("warning", msg=f"[VAULT] Pexels download timeout: {e}")
+            jlog("warning", msg=f"[VAULT] rembg.remove() échoué: {e}")
             return None
 
-        if img_resp.status_code != 200:
-            return None
+        # ── Étape 3 : Canvas blanc pur #FFFFFF, sujet centré pixel-perfect ───
+        # Dimensions B-Roll card cohérentes avec BROLL_CARD_WIDTH_RATIO=0.75
+        canvas_w = int(1080 * 0.75)        # 810px
+        canvas_h = int(canvas_w * 1.0667)  # 864px
 
-        # ── Pipeline DA Premium : rembg + ombre portée + LANCZOS ─────────────
-        final_path: Optional[str] = None
-        try:
-            img_raw = _PIL.open(io.BytesIO(img_resp.content)).convert("RGB")
+        # Redimensionner le sujet pour tenir dans le canvas (préserve le ratio)
+        subject.thumbnail((canvas_w, canvas_h), _PIL.Resampling.LANCZOS)
 
-            # Dimensions cible de la B-Roll card (config.BROLL_CARD_WIDTH_RATIO = 0.75)
-            card_w = int(1080 * 0.75)          # 810px
-            card_h = int(card_w * 1.0667)      # 864px
+        canvas  = _PIL.new("RGBA", (canvas_w, canvas_h), (255, 255, 255, 255))
+        sx, sy  = subject.size
+        paste_x = (canvas_w - sx) // 2
+        paste_y = (canvas_h - sy) // 2
+        canvas.paste(subject, (paste_x, paste_y), mask=subject.split()[3])
 
-            try:
-                from tools.graphics import compose_pexels_premium
-                premium = compose_pexels_premium(img_raw, target_w=card_w, target_h=card_h)
-                premium.save(str(cache_path_png), "PNG")
-                final_path = str(cache_path_png)
-                jlog("vault", msg=f"[VAULT] Pexels premium PNG → '{query}' ({cache_path_png.name})")
-            except Exception as premium_err:
-                jlog("warning", msg=f"[VAULT] compose_pexels_premium échoué ({premium_err}) — fallback JPEG")
-                # Fallback: crop centré 1080×1920, JPEG standard
-                target_w_full, target_h_full = 1080, 1920
-                img_w, img_h = img_raw.size
-                scale   = max(target_w_full / img_w, target_h_full / img_h)
-                new_w   = int(img_w * scale)
-                new_h   = int(img_h * scale)
-                img_raw = img_raw.resize((new_w, new_h), _PIL.Resampling.LANCZOS)
-                left    = (new_w - target_w_full) // 2
-                top     = (new_h - target_h_full) // 2
-                img_raw = img_raw.crop((left, top, left + target_w_full, top + target_h_full))
-                img_raw.save(str(cache_path_jpg), quality=90, optimize=True)
-                final_path = str(cache_path_jpg)
+        canvas.save(str(cache_path), "PNG")
+        jlog("vault", msg=f"[VAULT] rembg PNG → {cache_path.name} ({sx}×{sy} sur #FFFFFF)")
 
-        except Exception as e:
-            jlog("warning", msg=f"[VAULT] Pexels image processing error: {e}")
-            return None
-
-        # Enregistrement dans l'index
-        tokens = self._tokenize(description)
-        tokens.update(self._tokenize(query))
+        # ── Index ─────────────────────────────────────────────────────────────
         asset_entry = {
-            "id":                 f"AST_{int(time.time())}_{random.randint(1000, 9999)}",
-            "local_path":         final_path,
-            "prompt":             description,
-            "keywords":           list(tokens),
-            "source":             "pexels",
-            "pexels_id":          pexels_id,
-            "pexels_query":       query,
-            "pexels_query_hash":  query_hash,
-            "created_at":         time.time(),
-            "last_used":          0,
-            "usage_count":        0,
+            "id":          f"AST_{int(time.time())}_{random.randint(1000, 9999)}",
+            "local_path":  str(cache_path),
+            "url":         url,
+            "url_hash":    url_hash,
+            "source":      "rembg",
+            "created_at":  time.time(),
+            "last_used":   0,
+            "usage_count": 0,
         }
         self.index.setdefault("assets", []).append(asset_entry)
         self._save_index()
-        return final_path
+        return str(cache_path)
 
     async def fetch_image(self, query: str, keywords: List[str] = []) -> str:
+        """Retourne un asset en cache vault ou None (pas d'appel externe)."""
         match = self.find_best_match(query, keywords, is_hook=False)
         if match:
             return match["local_path"]
