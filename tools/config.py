@@ -298,13 +298,13 @@ def compute_dynamic_inversion_timestamps(
 
 # ── CTA Card ───────────────────────────────────────────────────────────────────
 
-CTA_BG_COLOR               = (14,   14,  26)
+CTA_BG_COLOR               = (13,   16,  25)   # #0D1019 — bleu nuit mesuré pixel-exact
 CTA_LOGO_CENTER_Y_RATIO    = 0.374
 CTA_TIKTOK_TEXT_Y_RATIO    = 0.459
-CTA_SEARCH_CENTER_Y_RATIO  = 0.571
+CTA_SEARCH_CENTER_Y_RATIO  = 0.55              # Y=55%H — spec DA Premium
 CTA_SEARCH_WIDTH_RATIO     = 0.618
 CTA_SEARCH_HEIGHT_RATIO    = 0.051
-CTA_SEARCH_RADIUS          = 26
+CTA_SEARCH_RADIUS          = 8                 # radius=8px — spec DA Premium (était 26)
 
 CTA_TIKTOK_HANDLE = "@tekiyo_"
 

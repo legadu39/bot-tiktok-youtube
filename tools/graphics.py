@@ -454,6 +454,7 @@ def render_text_solid(
     color:    tuple = TEXT_RGB,
     max_w:    int   = 920,
     inverted: bool  = False,
+    flat:     bool  = False,       # DA Premium: texte brut sans ombre/glow, pour spring sub-pixel
 ) -> np.ndarray:
     """
     MASTER_NEXUS_V36: Rendu texte solide avec compensation cap-height automatique.
@@ -463,11 +464,20 @@ def render_text_solid(
         Mesure pixel-exact sur video_referencement.mp4 : glyphes fins, regular weight,
         double-story 'a', aucun effet (pas d'ombre, pas de glow, pas d'outline).
         Taille cible : ~68 px à 1080 px de large  (= 36 px × 1080/576).
+
+    flat=True (DA Premium): skip shadow/composite — texte brut RGBA sur fond transparent.
+        Requis pour le spring sub-pixel (bbox alpha exacte, pas de halo de blur).
     """
     font, comp_size, tw, th = auto_size_font(text, weight, size, max_w)
     pad_x, pad_y = 36, 36
     cw = tw + pad_x * 2
     ch = th + pad_y * 2
+
+    if flat:
+        canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+        dc = ImageDraw.Draw(canvas)
+        dc.text((pad_x, pad_y), text, font=font, fill=color + (255,))
+        return np.array(canvas)
 
     shadow_col   = (120, 120, 120) if not inverted else (0, 0, 0)
     shadow_alpha = 20
@@ -781,124 +791,48 @@ def render_broll_card(
 
 def _render_tiktok_logo_vector(size: int) -> np.ndarray:
     """
-    FIX 2026-04-15: Logo TikTok vectoriel COMPLET — note 'd' + trait vertical soudé.
+    DA Premium FIX 2026-04-30: Placeholder transparent 120×120px.
 
-    Structure du logo :
-        1. Tête ovale (note head) en bas-gauche
-        2. Tige gauche (stem) montant de la tête jusqu'au sommet
-        3. Barre horizontale (beam) au sommet, vers la droite
-        4. Trait vertical droit (right bar) descendant depuis l'extrémité du beam
+    TODO: Insérer tiktok_app_logo_official.svg ici.
+          Remplacer ce placeholder par le SVG officiel TikTok une fois disponible.
+          Format attendu : SVG blanc sur fond transparent, centré dans 120×120px.
 
-    Effet glitch : couche cyan décalée -glitch_px, couche rouge +glitch_px, blanc centré.
-    Offset minimum garanti : max(3, 4% size).
+    L'ancienne implémentation PIL (note de musique + effet glitch cyan/rouge) a été
+    retirée — elle ne correspondait pas au logo officiel et introduisait des effets parasites.
     """
-    canvas    = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw      = ImageDraw.Draw(canvas)
-    glitch_px = max(3, int(size * 0.04))
-
-    def draw_tiktok(draw_ref, shift_x: int, color: tuple) -> None:
-        sw  = max(3, int(size * 0.11))   # épaisseur uniforme des barres
-        r   = int(size * 0.16)            # rayon tête ovale
-
-        # Ancrage horizontal (centré, légèrement décalé à gauche + glitch)
-        cx  = size // 2 + shift_x - int(size * 0.05)
-        hcy = int(size * 0.70)
-
-        # 1. Tête ovale (note head)
-        draw_ref.ellipse([cx - r, hcy - r, cx + r, hcy + r], fill=color)
-
-        # 2. Tige gauche (stem) — monte depuis la tête jusqu'au sommet
-        stem_left = cx + r - sw
-        stem_top  = int(size * 0.15)
-        draw_ref.rectangle([stem_left, stem_top,
-                             stem_left + sw, hcy + r], fill=color)
-
-        # 3. Barre horizontale (beam) au sommet de la tige
-        beam_right = stem_left + sw + int(size * 0.27)
-        draw_ref.rectangle([stem_left, stem_top,
-                             beam_right, stem_top + sw], fill=color)
-
-        # 4. Trait vertical droit (right bar) — descend depuis l'extrémité du beam
-        vbar_bot = int(size * 0.55)
-        draw_ref.rectangle([beam_right - sw, stem_top,
-                             beam_right, vbar_bot], fill=color)
-
-    # Couches glitch (cyan gauche, rouge droite) puis blanc centré
-    draw_tiktok(draw, -glitch_px, (0, 242, 234, 200))
-    draw_tiktok(draw,  glitch_px, (255, 0, 80, 200))
-    draw_tiktok(draw,  0,         (255, 255, 255, 255))
-    return np.array(canvas)
+    # Placeholder transparent fixe 120×120 — aucun dessin PIL
+    return np.zeros((120, 120, 4), dtype=np.uint8)
 
 
 def _render_search_pill(
     width:      int,
     height:     int,
     handle:     str   = "@tekiyo_",
-    bg:         tuple = (255, 255, 255),
-    text_color: tuple = (30, 30, 30),
+    bg:         tuple = (26, 29, 39),    # #1A1D27 — spec DA Premium
+    text_color: tuple = (255, 255, 255), # #FFFFFF — spec DA Premium
+    radius:     int   = 8,               # radius=8px — spec DA Premium
 ) -> np.ndarray:
     """
-    FIX 2026-04-15: Search bar pill fidèle à la référence.
-    - Fond blanc, coins arrondis
-    - Bordure gauche 3px #00F2EA (cyan), bordure droite 3px #FF0050 (rouge)
-    - Icône loupe noire à gauche
-    - "@tekiyo_" centré, Inter-Regular
-    - Mini logo TikTok (note 'd' + glitch) à droite intérieur
+    DA Premium FIX 2026-04-30: Barre de recherche pixel-perfect TikTok outro.
+
+    Rectangle simple #1A1D27, border-radius=8px — zéro effet parasite.
+    Supprimé : bordures cyan/rouge, icône loupe, mini logo glitch.
+    Handle @tekiyo_ centré géométriquement, blanc #FFFFFF, Inter-Regular.
     """
-    radius = height // 2
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw   = ImageDraw.Draw(canvas)
 
-    # 1. Fond blanc
-    draw.rounded_rectangle([0, 0, width-1, height-1], radius=radius, fill=bg + (255,))
+    # 1. Fond flat #1A1D27, radius=8px
+    draw.rounded_rectangle([0, 0, width - 1, height - 1],
+                            radius=radius, fill=bg + (255,))
 
-    # 2. Bordure bicolore — contour complet en cyan puis demi-droite écrasée en rouge
-    border_w = 3
-    cy_col   = (0, 242, 234, 255)    # #00F2EA
-    rd_col   = (255, 0, 80, 255)     # #FF0050
-
-    b_layer  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    bd       = ImageDraw.Draw(b_layer)
-    bd.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
-                          outline=cy_col, width=border_w)
-
-    r_layer  = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    rd       = ImageDraw.Draw(r_layer)
-    rd.rounded_rectangle([0, 0, width-1, height-1], radius=radius,
-                          outline=rd_col, width=border_w)
-    mask_r   = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(mask_r).rectangle([width // 2, 0, width, height], fill=255)
-    b_layer.paste(r_layer, (0, 0), mask=mask_r)
-    canvas.alpha_composite(b_layer)
-    draw = ImageDraw.Draw(canvas)   # rafraîchir draw sur canvas mis à jour
-
-    # 3. Icône loupe à gauche
-    icon_size = int(height * 0.55)
-    pad       = int(height * 0.25)
-    lx, ly    = pad, (height - icon_size) // 2
-    sr        = int(icon_size * 0.38)
-    draw.ellipse([lx, ly, lx + sr * 2, ly + sr * 2],
-                 outline=(80, 80, 80, 255), width=2)
-    lp = int(sr * 0.70)
-    draw.line([lx + sr + lp - 2, ly + sr + lp - 2,
-               lx + icon_size,   ly + icon_size],
-              fill=(80, 80, 80, 255), width=3)
-
-    # 4. Handle centré — Inter-Regular (FIX 2026-04-15: était semibold)
+    # 2. Handle centré géométriquement — blanc, Inter-Regular
     font_size = max(20, int(height * 0.40))
     font      = find_font("regular", font_size)
     tw, th    = measure_text(handle, font)
     tx        = (width - tw) // 2
     ty        = (height - th) // 2
     draw.text((tx, ty), handle, font=font, fill=text_color + (255,))
-
-    # 5. Mini logo TikTok à droite (note 'd' + glitch, 45% de la hauteur)
-    mini_size = max(20, int(height * 0.45))
-    mini_arr  = _render_tiktok_logo_vector(mini_size)
-    mini_img  = Image.fromarray(mini_arr, mode="RGBA")
-    rx        = width - pad - mini_size
-    ry        = (height - mini_size) // 2
-    canvas.paste(mini_img, (rx, ry), mask=mini_img.split()[3])
 
     return np.array(canvas)
 
@@ -924,22 +858,16 @@ def render_cta_card(
 
     canvas = Image.fromarray(canvas_arr, mode="RGBA")
 
-    logo_size = int(canvas_w * 0.20 * logo_scale)
-    logo_arr  = _render_tiktok_logo_vector(logo_size)
+    # DA Premium FIX 2026-04-30: logo_size fixe 120px — placeholder transparent
+    # TODO: Insérer tiktok_app_logo_official.svg ici (voir _render_tiktok_logo_vector)
+    logo_size = 120
+    logo_arr  = _render_tiktok_logo_vector(logo_size)   # → 120×120 transparent
     logo_img  = Image.fromarray(logo_arr, mode="RGBA")
 
     logo_cx = (canvas_w - logo_size) // 2
     logo_cy = int(canvas_h * CTA_LOGO_CENTER_Y_RATIO) - logo_size // 2
     canvas.paste(logo_img, (logo_cx, logo_cy), mask=logo_img.split()[3])
-
-    tt_font_size = max(30, int(canvas_w * 0.085))
-    tt_font      = find_font("bold", tt_font_size)
-    tt_tw, tt_th = measure_text("TikTok", tt_font)
-    tt_x         = (canvas_w - tt_tw) // 2
-    tt_y         = int(canvas_h * CTA_TIKTOK_TEXT_Y_RATIO) - tt_th // 2
-
-    draw = ImageDraw.Draw(canvas)
-    draw.text((tt_x, tt_y), "TikTok", font=tt_font, fill=(255, 255, 255, 255))
+    # Note: texte "TikTok" retiré — superflu sans logo officiel visible
 
     pill_w = int(canvas_w * CTA_SEARCH_WIDTH_RATIO)
     pill_h = int(canvas_h * CTA_SEARCH_HEIGHT_RATIO)
